@@ -40,14 +40,14 @@ Outputs:
 
 ### CachyOS / KDE Plasma 6 (Linux)
 
-Install for your user:
+Download [`releases/Live-Zagreb-Wallpaper-Linux-Setup.tar.gz`](releases/Live-Zagreb-Wallpaper-Linux-Setup.tar.gz) (or clone the repo) and run:
 ```bash
-kpackagetool6 -t Plasma/Wallpaper -i studio/wallpaper/dist/kde/skill-issue-wallpaper
+./linux/install.sh
 ```
-
-To update after rebuilding:
+Or from the extracted archive:
 ```bash
-kpackagetool6 -t Plasma/Wallpaper -u studio/wallpaper/dist/kde/skill-issue-wallpaper
+tar -xzf Live-Zagreb-Wallpaper-Linux-Setup.tar.gz
+./install.sh
 ```
 
 To enable:
@@ -60,10 +60,9 @@ To enable:
 
 ### Windows (Lively Wallpaper)
 
-1. Install [Lively Wallpaper](https://rocksdanister.github.io/lively/) (Free & Open Source).
-2. Drag and drop `studio/wallpaper/dist/skill-issue-wallpaper-lively.zip` into the Lively window.
-3. Select the wallpaper to activate it.
-4. Right-click the wallpaper in Lively → **Customise** to configure city, language, and sharp mode.
+Download [`releases/Live-Zagreb-Wallpaper-Windows-Setup.zip`](releases/Live-Zagreb-Wallpaper-Windows-Setup.zip), extract it, and double-click **`Setup-Live-Zagreb-Wallpaper.bat`**.
+- Automatically installs [Lively Wallpaper](https://rocksdanister.github.io/lively/) via `winget` if not already installed, starts Lively, and imports `skill-issue-wallpaper-lively.zip`.
+- Right-click the wallpaper in Lively → **Customise** to configure city, language, and sharp mode.
 
 ---
 
