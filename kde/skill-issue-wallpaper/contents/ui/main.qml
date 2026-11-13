@@ -50,6 +50,7 @@ WallpaperItem {
         id: web
         anchors.fill: parent
         backgroundColor: "#0b0d11"
+        property bool fellBackToLocal: false
 
         settings.localContentCanAccessRemoteUrls: true
         settings.localContentCanAccessFileUrls: true
@@ -59,12 +60,15 @@ WallpaperItem {
         lifecycleState: root.isCovered ? WebEngineView.LifecycleState.Frozen : WebEngineView.LifecycleState.Active
 
         Component.onCompleted: {
-            url = Qt.resolvedUrl("../web/index.html") + "#" + root.getHash();
+            url = "https://damirlukina88.github.io/live-zagreb-wallpaper/#" + root.getHash();
         }
 
         onLoadingChanged: function(loadRequest) {
             if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
                 root.pushSettings();
+            } else if (loadRequest.status === WebEngineView.LoadFailedStatus && !fellBackToLocal) {
+                fellBackToLocal = true;
+                url = Qt.resolvedUrl("../web/index.html") + "#" + root.getHash();
             }
         }
 
