@@ -1,0 +1,19 @@
+{
+    "KPackageStructure": "Plasma/Wallpaper",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "TSRB Team"
+            }
+        ],
+        "Category": "Online",
+        "Description": "Zagreb Cathedral terrace live wallpaper with weather, sun, moon & seasons",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "hr.tsrb.skillissue.wallpaper",
+        "License": "GPL-3.0-or-later",
+        "Name": "Skill Issue: Zagreb Weather",
+        "Version": "1.0.0"
+    },
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

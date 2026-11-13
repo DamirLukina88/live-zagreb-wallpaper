@@ -1,0 +1,260 @@
+/* studio/wallpaper/web/panel.css
+   Desktop wallpaper UI styles adapted from Tegoba Vještine game HUD & weather modal.
+   All overlays have pointer-events: none to avoid intercepting desktop mouse clicks. */
+
+@font-face {
+    font-family: 'Press Start 2P';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/press-start-2p-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: 'Press Start 2P';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/press-start-2p-latin-ext.woff2') format('woff2');
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background-color: #0b0d11;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: 'Press Start 2P', monospace;
+}
+
+/* -----------------------------------------------------------------
+   Canvases
+   ----------------------------------------------------------------- */
+#weather-canvas, #weather-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    display: block;
+    opacity: 0;
+    transition: opacity 0.8s ease;
+    z-index: 1;
+}
+
+#weather-canvas.wx-ready, #weather-overlay.wx-ready {
+    opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #weather-canvas, #weather-overlay {
+        transition: none;
+    }
+}
+
+/* -----------------------------------------------------------------
+   Weather Panel (Top-Right Glass Card)
+   ----------------------------------------------------------------- */
+.weather-panel {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    width: 320px;
+    background-color: rgba(35, 39, 43, 0.88);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='pnoise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23pnoise)' opacity='0.28'/%3E%3C/svg%3E");
+    background-size: 140px 140px;
+    background-blend-mode: soft-light;
+    border: 2px solid #3a4048;
+    border-radius: 20px;
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    z-index: 7950;
+    padding: 16px;
+    color: #dedfe0;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+.weather-panel.loaded {
+    opacity: 1;
+    transform: none;
+}
+
+/* Header: Mini LCD title */
+.wm-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding: 11px 12px;
+    font-size: 9px;
+    color: #f6c231;
+    text-shadow: 1px 1px 0 #27272A;
+    background-color: #1a1a1a;
+    background-image: linear-gradient(rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.18) 50%);
+    background-size: 100% 3px;
+    border: 2px solid #27272A;
+    border-radius: 8px;
+    box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.7);
+}
+
+/* Current Weather Status Box */
+.wp-current {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    background-color: rgba(0, 0, 0, 0.38);
+    background-image: linear-gradient(rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.18) 50%);
+    background-size: 100% 3px;
+    border: 2px solid #333842;
+    border-radius: 8px;
+    box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+.wp-current-left {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.wp-city {
+    color: #38bdf8;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    text-shadow: 0 0 6px rgba(56, 189, 248, 0.35);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.wp-cond {
+    color: #e2e8f0;
+    font-size: 7px;
+    line-height: 1.3;
+}
+
+.wp-current-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.wp-icon {
+    font-size: 18px;
+}
+
+.wp-temp {
+    color: #f6c231;
+    font-size: 11px;
+    font-weight: bold;
+    text-shadow: 0 0 6px rgba(246, 194, 49, 0.3);
+}
+
+/* Sunrise & Sunset Row */
+.wm-sun-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 6px 8px;
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    font-size: 7px;
+    color: #c8ccd2;
+    background-color: rgba(0, 0, 0, 0.35);
+    border: 2px solid #444;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+
+.wm-sun-row[hidden] {
+    display: none;
+}
+
+.wm-sun-row b {
+    color: #f6c231;
+    font-weight: normal;
+    margin-left: 2px;
+}
+
+.wm-sun-icon {
+    font-size: 11px;
+    vertical-align: middle;
+}
+
+/* 3-Day Forecast List */
+.wm-forecast-list {
+    list-style: none;
+    padding: 10px;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background-color: #1a1a1a;
+    background-image: linear-gradient(rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.18) 50%);
+    background-size: 100% 3px;
+    border: 2px solid #27272A;
+    border-radius: 8px;
+    box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.7);
+}
+
+.wm-forecast-item {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    column-gap: 10px;
+    align-items: center;
+    padding: 9px 11px;
+    background-color: rgba(0, 0, 0, 0.35);
+    border-bottom: 2px solid var(--rank-color, #f6c231);
+    border-radius: 8px;
+    font-size: 8px;
+    --rank-color: #ffd343;
+}
+
+.wm-forecast-item:nth-child(2) {
+    --rank-color: #ffb13c;
+}
+.wm-forecast-item:nth-child(3) {
+    --rank-color: #ff8c42;
+}
+
+.wm-forecast-day {
+    color: var(--rank-color);
+    font-weight: bold;
+    text-shadow: 0 0 4px rgba(0, 0, 0, 0.55);
+}
+
+.wm-forecast-icon {
+    font-size: 11px;
+}
+
+.wm-forecast-temps {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    white-space: nowrap;
+}
+
+.wm-forecast-hi {
+    color: var(--rank-color);
+}
+
+.wm-forecast-lo {
+    color: #b2b2b3;
+    font-size: 0.85em;
+}

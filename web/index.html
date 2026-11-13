@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skill Issue: Zagreb Weather Wallpaper</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; connect-src https://api.open-meteo.com https://geocoding-api.open-meteo.com; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline';">
+    <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+    <canvas id="weather-canvas"></canvas>
+    <canvas id="weather-overlay"></canvas>
+
+    <div id="weather-panel" class="weather-panel">
+        <div class="wm-header">
+            <span id="wp-title">📍 VREMENSKA PROGNOZA</span>
+        </div>
+        <div class="wp-current">
+            <div class="wp-current-left">
+                <span class="wp-city" id="wp-city">Zagreb</span>
+                <span class="wp-cond" id="wp-cond">Vedro</span>
+            </div>
+            <div class="wp-current-right">
+                <span class="wp-icon" id="wp-icon">☀️</span>
+                <span class="wp-temp" id="wp-temp">--°C</span>
+            </div>
+        </div>
+        <div class="wm-sun-row" id="wp-sun-row" hidden>
+            <span><span class="wm-sun-icon">🌅</span> <span id="wp-sunrise-label">IZLAZAK</span> <b id="wp-sunrise">--:--</b></span>
+            <span><span class="wm-sun-icon">🌇</span> <span id="wp-sunset-label">ZALAZAK</span> <b id="wp-sunset">--:--</b></span>
+        </div>
+        <ul class="wm-forecast-list" id="wp-forecast-list"></ul>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
