@@ -1,7 +1,9 @@
 # Skill Issue: Zagreb Weather Live Wallpaper
 
 Dynamic desktop wallpaper for **CachyOS (KDE Plasma 6)** and **Windows (Lively Wallpaper)**.
-Reuses the game's Zagreb Cathedral terrace background, physical day/night sun path, real moon phase, seasons, and night lights — with an always-visible read-only weather card.
+This live wallpaper is part of **[no-skill-issue.com](https://no-skill-issue.com/)** (Croatian language version: **[tegobavjestine.com](https://tegobavjestine.com/)**).
+
+It reuses the game's Zagreb Cathedral terrace background, physical day/night sun path, real moon phase, seasons, and night lights — with an always-visible read-only weather card.
 
 ---
 
