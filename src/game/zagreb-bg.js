@@ -1,0 +1,1667 @@
+// src/zagreb-bg.js — the game's background: the Zagreb Cathedral seen from a terrace in the Upper
+// Town, under the real sky of the player's weather city.
+//
+// One painting (public/bg/zagreb-<season>.webp, sky transparent) with everything else drawn live:
+//   - the sky, sun, moon, stars and clouds follow the sun's real height for the city, date and time,
+//     blending through night, blue hour, golden hour and day;
+//   - weather is physically plausible: cloud, rain, snow and fog drain the colour and hide the sun,
+//     steady rain and snow fall from one grey sheet, distance fades into the air;
+//   - night lights sit on the painted windows and are mirrored in the wet terrace;
+//   - the terrace half-freezes in snow and frost; a rainbow may follow daytime rain.
+// Calm rules, as for every background: 30 fps cap, half resolution, dim and quarter speed while
+// playing, a soft glow instead of lightning flashes (none while playing), one still frame under
+// prefers-reduced-motion.
+//
+// Designed and approved in the local studio (studio/weather/styles-zagreb.js and engine.js, not
+// deployed); see wiki/decisions/zagreb-terrace-background.md. Change both together.
+
+import * as SUN from './sun.js';
+import { ZAGREB_LIGHTS } from './zagreb-lights.js';
+import { codeToWx } from './weather-bg.js';
+
+const FRAME_MS = 1000 / 30;
+// Scale factor for canvas backing store: native 1:1 on standard screens, and up to 2x
+// on high-DPI/mobile displays (retina/AMOLED) so the 1200x896 artwork renders crisp.
+// Wallpaper: the host page may set globalThis.__WP_SCALE__ (calm 0.5 / sharp) to override this.
+function getScale() {
+    if (typeof globalThis !== 'undefined' && typeof globalThis.__WP_SCALE__ === 'number') return globalThis.__WP_SCALE__;
+    const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+    return Math.min(Math.max(1, dpr), 2);
+}
+const POOL = { rain: 160, snow: 140, hail: 60 };
+const ART_BASE = 'bg/';
+// The site caches .webp files for a year (public/_headers), so a changed painting is only seen
+// if its address changes: bump this number whenever any public/bg/ image is regenerated.
+const ART_VERSION = 1;
+const artUrl = name => `${ART_BASE}zagreb-${name}.webp?v=${ART_VERSION}`;
+
+// Vibrant look: punchier colour and contrast, as a CSS filter plus a light vignette
+const LOOK_CSS = 'contrast(1.1) saturate(1.35) brightness(1.03)';
+const LOOK_VIGNETTE = 0.16;
+
+// ------------------------------------------------------------------
+// Colour and random helpers
+// ------------------------------------------------------------------
+const hexCache = new Map();
+function hex(c) {
+    let v = hexCache.get(c);
+    if (v) return v;
+    const s = c.replace('#', '');
+    v = [0, 2, 4].map(i => parseInt(s.slice(i, i + 2), 16));
+    if (hexCache.size > 4000) hexCache.clear();
+    hexCache.set(c, v);
+    return v;
+}
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+function mix(a, b, t) {
+    const A = hex(a), B = hex(b), k = clamp(t);
+    return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * k).toString(16).padStart(2, '0')).join('');
+}
+function rgba(c, a) {
+    const A = hex(c);
+    return `rgba(${A[0]},${A[1]},${A[2]},${a})`;
+}
+function rng(seed) {
+    let s = (seed >>> 0) || 1;
+    return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+}
+
+// opts.onArtError: called once if the painting cannot be loaded
+export function createZagrebBackground(canvas, overlay, opts = {}) {
+    const ctx = canvas.getContext('2d');
+    const octx = overlay.getContext('2d');
+    const mq = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    // Where the weather is and how cold (set by weather.js); the test panel can pin the clock or season
+    const ENV = { lat: null, lon: null, utcOffsetSeconds: null, tempC: null };
+    const TEST = { clock: null, season: null };
+    // A holiday look paints its own scene on top (src/holiday.js); the terrace then steps aside
+    // and only the sky, sun, moon, clouds and weather are drawn here
+    let sceneryHidden = false;
+    const S = {
+        wx: wxFor(0, true, 0), enabled: true, paused: false, t: 0, last: 0, anim: null, W: 1, H: 1, st: {},
+        clouds: [], pools: { rain: [], snow: [], hail: [] }, L: { a: 0, x: 0.5, next: 3 },
+        drawn: false, shown: false, prev: null, fade: 0, dead: false
+    };
+    // Wallpaper span across several displays (setLayout). Each page draws its own window into one
+    // "world" the size of the whole desktop: sky, sun, moon, stars and clouds run across all of it,
+    // the terrace is fitted into the scene display's rectangle and carried on across the other
+    // displays (drawExtension). Rain, snow, the vignette and the veil stay per display.
+    // In canvas pixels: DW/DH world size, OX/OY this canvas inside it, RX/RY/RW/RH the scene rectangle.
+    // Without a span the world is this canvas, so every formula below reduces to the original one.
+    let SPAN = null; // { view: {x,y,w,h}, desk: {w,h}, scene: {x,y,w,h} } in CSS pixels
+    const WORLD = { span: false, DW: 1, DH: 1, OX: 0, OY: 0, RX: 0, RY: 0, RW: 1, RH: 1, key: '' };
+    canvas.style.filter = LOOK_CSS;
+
+    // The shared weather model, plus a key so the light is recomputed only when the weather changes
+    function wxFor(code, isDay, windKmh) {
+        const wx = codeToWx(code, isDay, windKmh);
+        wx.key = code + '|' + (isDay ? 1 : 0) + '|' + wx.wind;
+        return wx;
+    }
+
+    // The scenery: one painting of the terrace, town and cathedral with a transparent sky
+    const sceneryImg = new Image();
+    let imgLoaded = false;
+    sceneryImg.onload = () => {
+        imgLoaded = true;
+        kick();
+    };
+    // Without the artwork there is no scene: the caller falls back to the Film photo hills
+    sceneryImg.onerror = () => { if (opts.onArtError) opts.onArtError(); };
+    sceneryImg.src = artUrl('spring'); // spring: the original painting
+
+    // ------------------------------------------------------------------
+    // Light model: sky, sun, scene tint and lights all follow the sun's real height
+    // ------------------------------------------------------------------
+    const ZAGREB = { lat: 45.815, lon: 15.982 };
+    const HORIZON = 520 / 896; // the hill line on the cutout
+    const lerp = (a, b, t) => a + (b - a) * t;
+
+    // Now (or the test panel's clock) at the weather city; Zagreb until the first weather arrives
+    function env() {
+        return { date: TEST.clock || new Date(), lat: ENV.lat == null ? ZAGREB.lat : ENV.lat, lon: ENV.lon == null ? ZAGREB.lon : ENV.lon };
+    }
+
+    // Where the cutout sits on the canvas: bottom-anchored, cathedral centred
+    function layout(W, H) {
+        const iw = sceneryImg.naturalWidth || 1200, ih = sceneryImg.naturalHeight || 896;
+        const aspect = iw / ih;
+        if (W / H > aspect) return { drawX: 0, drawY: H - W / aspect, drawW: W, drawH: W / aspect, W, H };
+        return { drawX: (W - H * aspect) * 0.5, drawY: 0, drawW: H * aspect, drawH: H, W, H };
+    }
+    // The cutout fitted into the scene rectangle, in world coordinates; ox/oy: the rectangle's corner
+    function sceneGeom() {
+        const g = layout(WORLD.RW, WORLD.RH);
+        g.drawX += WORLD.RX;
+        g.drawY += WORLD.RY;
+        g.ox = WORLD.RX;
+        g.oy = WORLD.RY;
+        return g;
+    }
+
+    // Clear-sky look at each sun altitude (degrees); values in between are blended.
+    // top/mid/hor: sky colours. glow: colour and strength of the light around the sun's place on
+    // the horizon. tint: multiplied over the scenery. lum: overall brightness. stars, lights: 0..1.
+    const KEYS = [
+        { alt: -18, top: '#070b16', mid: '#0b1222', hor: '#121b30', glow: '#3a3048', glowK: 0, tint: '#121c34', tintA: 0.72, lum: 0.06, stars: 1, lights: 1 },
+        { alt: -12, top: '#0a1122', mid: '#101c36', hor: '#1c2c4c', glow: '#4a3c58', glowK: 0.08, tint: '#16223e', tintA: 0.68, lum: 0.10, stars: 0.9, lights: 1 },
+        { alt: -6, top: '#14254d', mid: '#27437a', hor: '#5c6f9c', glow: '#c9856b', glowK: 0.30, tint: '#3c5087', tintA: 0.56, lum: 0.25, stars: 0.2, lights: 1 },
+        { alt: -4, top: '#1f3a6e', mid: '#4a6aa5', hor: '#c98f7c', glow: '#ff9a5c', glowK: 0.55, tint: '#5a699b', tintA: 0.44, lum: 0.36, stars: 0.1, lights: 0.9 },
+        { alt: -1, top: '#33598f', mid: '#86a0c8', hor: '#f7b07a', glow: '#ff9e4a', glowK: 0.85, tint: '#aa96a0', tintA: 0.32, lum: 0.55, stars: 0, lights: 0.55 },
+        { alt: 2, top: '#3f6fae', mid: '#a9c0dc', hor: '#fbc98a', glow: '#ffb65c', glowK: 0.85, tint: '#ffd6aa', tintA: 0.26, lum: 0.72, stars: 0, lights: 0.15 },
+        { alt: 6, top: '#4478b8', mid: '#b5cfe8', hor: '#f6ddb4', glow: '#ffd596', glowK: 0.5, tint: '#ffe8c8', tintA: 0.14, lum: 0.86, stars: 0, lights: 0 },
+        { alt: 12, top: '#4b7cb6', mid: '#9fc0e4', hor: '#cfdff2', glow: '#fff0cf', glowK: 0.2, tint: '#ffffff', tintA: 0, lum: 1, stars: 0, lights: 0 },
+        { alt: 90, top: '#4b7cb6', mid: '#9fc0e4', hor: '#cfdff2', glow: '#fff0cf', glowK: 0.2, tint: '#ffffff', tintA: 0, lum: 1, stars: 0, lights: 0 }
+    ];
+    const SUN_COLOR = [[-2, '#ff6a36'], [1, '#ff8f45'], [5, '#ffc070'], [12, '#ffe6b0'], [25, '#fff8e2']];
+    // What a grey sky looks like in full daylight: [top, middle, horizon]
+    const GREY = {
+        overcast: ['#6e7f96', '#8c9bb0', '#abb8c8'],
+        rain: ['#65768d', '#8494a9', '#a3b2c4'],
+        fog: ['#9aa5b3', '#b3bcc8', '#c5ccd6'],
+        snow: ['#a4adb9', '#bcc4ce', '#d3d9e0'],
+        storm: ['#424855', '#5a616f', '#717887']
+    };
+
+    function keyAt(alt) {
+        const a = clamp(alt, KEYS[0].alt, 90);
+        let i = 0;
+        while (i < KEYS.length - 2 && KEYS[i + 1].alt <= a) i++;
+        const A = KEYS[i], B = KEYS[i + 1], u = clamp((a - A.alt) / (B.alt - A.alt));
+        const out = { alt };
+        for (const k of ['top', 'mid', 'hor', 'glow', 'tint']) out[k] = mix(A[k], B[k], u);
+        for (const k of ['glowK', 'tintA', 'lum', 'stars', 'lights']) out[k] = lerp(A[k], B[k], u);
+        return out;
+    }
+    function colorAt(table, v) {
+        if (v <= table[0][0]) return table[0][1];
+        for (let i = 0; i < table.length - 1; i++) {
+            if (v <= table[i + 1][0]) return mix(table[i][1], table[i + 1][1], (v - table[i][0]) / (table[i + 1][0] - table[i][0]));
+        }
+        return table[table.length - 1][1];
+    }
+
+    // The light for this frame. Recomputed when the sun has moved a tenth of a degree, the minute
+    // or the weather changes, or the canvas is resized.
+    let LIGHT = null;
+    function computeLight(f) {
+        const { W, H, wx } = f;
+        const e = env();
+        const alt = SUN.sunPosition(e.date, e.lat, e.lon).altitude;
+        const season = seasonFor(e);
+        const art = seasonArt(season);
+        const key = [Math.round(alt * 10), wx.key, W, H, Math.floor(e.date.getTime() / 60000), season, art === sceneryImg, ENV.tempC, WORLD.key].join('|');
+        if (LIGHT && LIGHT.key === key) return LIGHT;
+        const RH = WORLD.RH;
+
+        const L = keyAt(alt);
+        L.key = key;
+        L.season = season;
+        L.art = art;
+        const g = L.geom = sceneGeom();
+        L.horizonY = g.drawY + HORIZON * g.drawH;
+
+        // Where the day or night is: 0 at sunrise (sunset), 1 at sunset (next sunrise)
+        const now = e.date.getTime(), DAY = 86400000;
+        const today = SUN.sunTimes(e.date, e.lat, e.lon);
+        let dayP = 0.5, nightP = 0.5;
+        if (today.sunrise && today.sunset) {
+            const rise = today.sunrise.getTime(), set = today.sunset.getTime();
+            dayP = (now - rise) / (set - rise);
+            if (now >= set) {
+                const next = SUN.sunTimes(new Date(now + DAY), e.lat, e.lon).sunrise;
+                nightP = next ? (now - set) / (next.getTime() - set) : 0.5;
+            } else if (now < rise) {
+                const prev = SUN.sunTimes(new Date(now - DAY), e.lat, e.lon).sunset;
+                nightP = prev ? (now - prev.getTime()) / (rise - prev.getTime()) : 0.5;
+            }
+        }
+        L.times = today;
+        L.snowCover = wx.snowCover || 0;
+        // Half-frozen terrace: with lying snow or ice, or when the air is at or below freezing.
+        // 0 = wet, 1 = mostly ice.
+        const cold = typeof ENV.tempC === 'number' ? clamp((1 - ENV.tempC) / 5) : 0;
+        L.frost = clamp(Math.max(L.snowCover * 0.9, cold));
+        // Fog, falling snow and rain hide the distance: how much the far town fades into the air
+        L.haze = Math.max(wx.fog * 0.85, wx.snow * 0.5, wx.rain * 0.28);
+
+        // The sun is always in view: it rises on the left, crosses the sky and sets on the right.
+        // Its height on screen follows the real altitude, so winter days stay low.
+        L.sunX = W * (0.29 + 0.56 * clamp(dayP, -0.08, 1.08)); // between the trees on either side
+        // (in a span the arc runs from the scene's top, not the top of the tallest display)
+        const skyH = L.horizonY - WORLD.RY;
+        L.sunY = alt >= 0 ? L.horizonY - Math.pow(clamp(alt / 65), 0.8) * skyH * 0.86 : L.horizonY - alt * RH * 0.012;
+        L.moonX = W * (0.24 + 0.62 * clamp(nightP));
+        L.moonY = L.horizonY - Math.sin(Math.PI * clamp(nightP)) * skyH * 0.72 - RH * 0.03;
+        L.lowSun = clamp(1 - Math.abs(alt - 1) / 9); // 1 around sunrise and sunset, 0 by mid-morning
+
+        // Weather: how much of the clear-sky colour survives, and what grey replaces the rest
+        const cover = clamp((wx.cloud - 0.3) / 0.6);
+        let cs = (1 - cover) * (1 - wx.fog * 0.8);
+        if (wx.thunder) cs *= 0.3;
+        L.cs = cs = Math.max(cs, 0.06);
+        const grey = wx.thunder ? GREY.storm : wx.fog > 0.4 ? GREY.fog : wx.snow > 0 ? GREY.snow : wx.rain > 0.1 ? GREY.rain : GREY.overcast;
+        const dim = c => mix('#070a11', c, Math.pow(L.lum, 0.9)); // a grey sky is as dark as the hour
+        L.top = mix(dim(grey[0]), L.top, cs);
+        L.mid = mix(dim(grey[1]), L.mid, cs);
+        L.hor = mix(dim(grey[2]), L.hor, cs);
+        L.glowA = L.glowK * (0.12 + 0.88 * cs) * (alt > -14 ? 1 : 0);
+        L.pinkA = cs * clamp(1 - Math.abs(alt + 1) / 5) * 0.2; // pink band opposite the low sun
+
+        // Scenery: the hour's tint loses its colour under cloud, then the weather adds its wash
+        L.tint = mix(L.tint, mix(L.tint, '#8a8f98', 0.7), 1 - cs);
+        const day = clamp(L.lum * 1.3);
+        L.wash = wx.thunder ? '#505866' : wx.rain > 0.05 ? '#b9c6d7' : '#cdd6e2';
+        L.washA = (wx.thunder ? 0.42 : wx.rain > 0.05 ? 0.28 : wx.cloud > 0.65 ? 0.22 : 0) * day;
+        L.warmA = L.glowK * cs * 0.3 * (alt > -6 ? 1 : 0);
+
+        const clearView = (1 - clamp((wx.cloud - 0.4) / 0.5)) * (1 - wx.fog * 0.6);
+        L.sunVis = clearView * clamp((alt + 1.5) / 1.5);
+        L.sunCol = colorAt(SUN_COLOR, alt);
+        L.moon = currentMoon(e.date);
+        L.moonVis = clearView * clamp((-alt - 2) / 4);
+        L.moonA = L.moonVis * L.moon.lit;
+        L.starVis = L.stars * (1 - clamp(wx.cloud / 0.7)) * (1 - wx.fog * 0.7);
+        // Lamps and windows also come on under a dark daytime storm or thick fog
+        L.lights = Math.max(L.lights, wx.thunder && L.lum > 0.5 ? 0.3 : 0, wx.fog > 0.5 && L.lum > 0.5 ? 0.2 : 0);
+
+        // Clouds: bright tops, shaded bases, both as dark as the hour and warmed by a low sun
+        const bright = Math.pow(L.lum, 0.7);
+        L.cloudLit = mix('#1c2436', mix(mix('#ffffff', L.glow, L.lowSun * cs * 0.3), '#b4bdc9', cover * 0.5), bright);
+        L.cloudShade = mix('#0f1420', mix('#9fb0c6', '#7a6a8c', L.lowSun * cs), bright);
+        L.sheet = mix(L.mid, '#05070b', 0.42);
+        L.fog = mix('#141a26', mix('#cad3de', L.glow, L.lowSun * cs * 0.2), Math.pow(L.lum, 0.8));
+
+        LIGHT = L;
+        return L;
+    }
+
+    function drawSun(f, L) {
+        if (L.sunVis <= 0.02) return;
+        const { ctx } = f;
+        const r = Math.min(f.RW, f.RH) * 0.032 * (1 + 0.35 * L.lowSun);
+        const halo = r * (6 + 8 * L.lowSun);
+        const g = ctx.createRadialGradient(L.sunX, L.sunY, 0, L.sunX, L.sunY, halo);
+        g.addColorStop(0, rgba(L.sunCol, 0.8 * L.sunVis));
+        g.addColorStop(0.2, rgba(L.sunCol, 0.34 * L.sunVis));
+        g.addColorStop(0.5, rgba(L.sunCol, 0.1 * L.sunVis));
+        g.addColorStop(1, rgba(L.sunCol, 0));
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = g;
+        ctx.fillRect(L.sunX - halo, L.sunY - halo, halo * 2, halo * 2);
+        ctx.restore();
+
+        const core = mix(L.sunCol, '#ffffff', 0.8 - 0.35 * L.lowSun);
+        const d = ctx.createRadialGradient(L.sunX, L.sunY, 0, L.sunX, L.sunY, r);
+        d.addColorStop(0, rgba(core, L.sunVis));
+        d.addColorStop(0.82, rgba(core, L.sunVis));
+        d.addColorStop(1, rgba(L.sunCol, 0));
+        ctx.fillStyle = d;
+        ctx.beginPath();
+        ctx.arc(L.sunX, L.sunY, r, 0, 6.2832);
+        ctx.fill();
+    }
+
+    // ------------------------------------------------------------------
+    // Seasons: the same painting with its foliage recoloured (studio/weather/tools/make-seasons.py).
+    // Spring is the original. Whole months of the weather city's own calendar, the other way
+    // round south of the equator. Buildings are identical in every version, so the night lights
+    // are shared. Only the season in use is downloaded.
+    // ------------------------------------------------------------------
+    const SEASONS = ['winter', 'spring', 'summer', 'autumn'];
+    const SEASON_ART = { spring: sceneryImg };
+    function seasonFor(e) {
+        if (TEST.season && SEASONS.includes(TEST.season)) return TEST.season;
+        // The month where the weather is, not where the device is
+        const month = typeof ENV.utcOffsetSeconds === 'number'
+            ? new Date(e.date.getTime() + ENV.utcOffsetSeconds * 1000).getUTCMonth()
+            : e.date.getMonth();
+        const north = SEASONS[Math.floor(((month + 1) % 12) / 3)]; // Dec-Feb winter, Mar-May spring, ...
+        return e.lat < 0 ? SEASONS[(SEASONS.indexOf(north) + 2) % 4] : north;
+    }
+    // The season's artwork, or the spring original while it is still loading (or if it fails)
+    function seasonArt(season) {
+        let img = SEASON_ART[season];
+        if (!img) {
+            img = SEASON_ART[season] = new Image();
+            img.onload = () => kick();
+            img.src = artUrl(season);
+        }
+        return img.complete && img.naturalWidth > 0 ? img : sceneryImg;
+    }
+
+    let rainbowActiveUntil = 0; // performance.now() time when the current rainbow ends
+    let lastHadRain = false;
+
+    // Seeded starfield for night sky. 90 on one screen; a span uses more of the same sequence so
+    // the density stays the same over the wider world.
+    const STARS = [];
+    const STAR_COUNT = 90, STAR_MAX = 400;
+    (function initStars() {
+        let s = 98765;
+        const rng = () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+        for (let i = 0; i < STAR_MAX; i++) {
+            STARS.push({
+                x: rng(),
+                y: rng() * 0.45,
+                r: 0.6 + rng() * 1.3,
+                twinkle: rng() * 6.28,
+                speed: 1.5 + rng() * 2.5
+            });
+        }
+    })();
+
+    // Rain ripples on the wet terrace. They live only on the floor itself: the floor starts at
+    // 74.6% of the artwork's height (below the kerb), so ripples are placed from 77% down.
+    const RIPPLE_TOP = 0.77, RIPPLE_SPAN = 0.21;
+    const RIPPLES = [];
+    for (let i = 0; i < 16; i++) {
+        RIPPLES.push({
+            x: 0.08 + Math.random() * 0.84,
+            y: RIPPLE_TOP + Math.random() * RIPPLE_SPAN,
+            r: Math.random() * 18,
+            maxR: 10 + Math.random() * 20,
+            life: Math.random(),
+            speed: 0.4 + Math.random() * 0.5
+        });
+    }
+
+    // Rainbow: one thin band of smoothly blended colour that adds light to the sky, with the sky a
+    // touch brighter inside the bow, darker between the bows, and a faint reversed outer bow.
+    // It spans the whole view as one centred arch, whatever side the sun is on.
+    // [radius as a fraction of the bow's radius, red, green, blue, strength, fades with a low sun]
+    const BOW = [
+        [0.780, 255, 255, 255, 0.00, 0],
+        [0.900, 255, 255, 255, 0.10, 0], // brighter sky inside the bow
+        [0.915, 150, 90, 255, 0.50, 1],  // violet
+        [0.932, 70, 130, 255, 0.66, 1],  // blue
+        [0.949, 60, 215, 120, 0.72, 1],  // green
+        [0.966, 255, 236, 80, 0.80, 0.5], // yellow
+        [0.983, 255, 150, 50, 0.84, 0],  // orange
+        [1.000, 255, 60, 50, 0.80, 0],   // red
+        [1.010, 255, 60, 50, 0.00, 0],
+        [1.170, 0, 0, 20, 0.00, 0],      // darker band between the bows
+        [1.185, 255, 70, 55, 0.24, 0],   // outer bow, colours reversed
+        [1.203, 255, 236, 90, 0.27, 0.5],
+        [1.221, 70, 220, 130, 0.24, 1],
+        [1.239, 90, 110, 255, 0.19, 1],
+        [1.255, 150, 90, 255, 0.00, 1]
+    ];
+    function drawRainbow(f, L, alpha) {
+        if (alpha <= 0.01) return;
+        const { ctx, W, H, RW, RH } = f;
+        const alt = clamp(L.alt, 2, 40);
+        // One full arc across the view, centred over the cathedral (the user's choice, 2026-11-11)
+        const R = Math.min(RW * 0.44, RH * 0.56);
+        const cx = f.RX + RW * 0.49, cy = f.RY + RH * 0.68;
+        const cool = 0.25 + 0.75 * clamp(alt / 10); // near the horizon the sun is red, so is the bow
+
+        const r0 = R * BOW[0][0], r1 = R * BOW[BOW.length - 1][0];
+        const g = ctx.createRadialGradient(cx, cy, r0, cx, cy, r1);
+        for (const [rr, cr, cg, cb, a, fade] of BOW) {
+            const k = a * (1 - fade * (1 - cool));
+            g.addColorStop((rr * R - r0) / (r1 - r0), `rgba(${cr},${cg},${cb},${k.toFixed(3)})`);
+        }
+        ctx.save();
+        ctx.fillStyle = g;
+        // Strength chosen by the user with the studio dial on 2026-11-12 (35% of the first tuning).
+        // Painted once for colour (a pale sky would wash a purely additive bow out), then once
+        // more as added light so it still glows instead of sitting on the sky like paint
+        ctx.globalAlpha = Math.min(1, alpha * 0.147);
+        ctx.fillRect(0, 0, W, H);
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = Math.min(1, alpha * 0.193);
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+    }
+
+    // Tonight's moon phase
+    const currentMoon = date => SUN.moonPhase(date || new Date());
+
+    // Dark "seas" of the near side, as [x, y, radiusX, radiusY] in disc radii
+    const MARIA = [
+        [-0.42, -0.08, 0.30, 0.40], // Oceanus Procellarum
+        [-0.18, -0.42, 0.26, 0.22], // Mare Imbrium
+        [0.20, -0.34, 0.17, 0.17],  // Mare Serenitatis
+        [0.36, -0.10, 0.21, 0.17],  // Mare Tranquillitatis
+        [0.58, -0.22, 0.10, 0.12],  // Mare Crisium
+        [0.42, 0.18, 0.15, 0.13],   // Mare Fecunditatis
+        [-0.12, 0.34, 0.22, 0.16]   // Mare Nubium
+    ];
+
+    // The moon disc for a phase, drawn once per size and phase on its own small canvas. The unlit
+    // part is cut away so the sky shows through.
+    let moonCache = { key: '', canvas: null };
+    function moonDisc(r, m) {
+        const key = Math.round(r * 4) + '|' + Math.round(m.phase * 200);
+        if (moonCache.key === key) return moonCache.canvas;
+
+        const size = Math.ceil(r * 2 + 8);
+        const c = document.createElement('canvas');
+        c.width = c.height = size;
+        const g = c.getContext('2d');
+        const cx = size / 2, cy = size / 2;
+
+        // Lit surface with soft darkening toward the limb
+        const body = g.createRadialGradient(cx - r * 0.15, cy - r * 0.15, r * 0.1, cx, cy, r);
+        body.addColorStop(0, '#f6f3e8');
+        body.addColorStop(0.75, '#e6e3d8');
+        body.addColorStop(1, '#c9c8c2');
+        g.fillStyle = body;
+        g.beginPath();
+        g.arc(cx, cy, r, 0, 6.2832);
+        g.fill();
+
+        g.save();
+        g.clip();
+        g.fillStyle = 'rgba(105, 112, 128, 0.24)';
+        for (const [x, y, rx, ry] of MARIA) {
+            g.beginPath();
+            g.ellipse(cx + x * r, cy + y * r, rx * r, ry * r, 0, 0, 6.2832);
+            g.fill();
+        }
+        g.restore();
+
+        // Keep only the lit part: the outer half circle on the lit side plus the terminator,
+        // an ellipse that bulges toward the lit side for a crescent and away from it when gibbous.
+        if (m.lit < 0.995) {
+            const k = Math.abs(Math.cos(m.phase * 2 * Math.PI)); // terminator width, 0 at the quarters
+            g.save();
+            g.globalCompositeOperation = 'destination-in';
+            g.translate(cx, cy);
+            g.rotate(-0.35); // the moon rarely sits upright
+            if (!m.waxing) g.scale(-1, 1); // waning: lit on the left
+            try { g.filter = `blur(${Math.max(0.4, r * 0.05).toFixed(2)}px)`; } catch (_) {}
+            g.beginPath();
+            g.arc(0, 0, r + 4, -Math.PI / 2, Math.PI / 2, false);
+            g.ellipse(0, 0, Math.max(0.001, k * r), r + 4, 0, Math.PI / 2, -Math.PI / 2, m.lit < 0.5);
+            g.closePath();
+            g.fillStyle = '#000';
+            g.fill();
+            g.restore();
+        }
+
+        moonCache = { key, canvas: c };
+        return c;
+    }
+
+    // ------------------------------------------------------------------
+    // Night lights
+    // ------------------------------------------------------------------
+    // Positions come from zagreb-lights.js
+    const TINT = { amber: [255, 200, 90], yellow: [255, 222, 120], white: [255, 240, 210] };
+    const hash01 = n => { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+
+    // The wet terrace mirrors the scene, and the artwork already paints that reflection. Measured
+    // on the 1200x896 cutout: the distant town mirrors about y = 628.5 (spire tip 391 -> 866), the
+    // railing and anything standing on the terrace edge about y = 660. The floor starts at y = 668,
+    // so reflections of low buildings fall behind the kerb and are not drawn.
+    const MIRROR_FAR = 628.5 / 896, MIRROR_NEAR = 660 / 896, FLOOR_TOP = 668 / 896;
+
+    // Floodlit areas: a soft upward wash that only lands on the scenery, never on the sky.
+    // Static, so it is drawn once per layout onto its own canvas.
+    let floodCache = { key: '', canvas: null };
+    function floodLayer(list, geom) {
+        const floods = list.filter(L => L.t === 'flood');
+        if (!floods.length) return null;
+        const key = JSON.stringify([floods, geom]);
+        if (floodCache.key === key) return floodCache.canvas;
+        const c = floodCache.canvas || document.createElement('canvas');
+        c.width = geom.W;
+        c.height = geom.H;
+        const g = c.getContext('2d');
+        g.setTransform(1, 0, 0, 1, -geom.ox, -geom.oy); // the canvas covers only the scene rectangle
+        const sc = geom.drawW / 1200;
+        const tmp = document.createElement('canvas');
+        tmp.width = tmp.height = 64;
+        for (const L of floods) {
+            const x = geom.drawX + L.x * geom.drawW, y = geom.drawY + L.y * geom.drawH;
+            const rx = Math.max(2, L.w * sc / 2), ry = Math.max(2, L.h * sc / 2);
+            // Work in a unit circle stretched to the ellipse, so the edge fades out softly
+            g.save();
+            g.translate(x, y);
+            g.scale(rx, ry);
+            // Brightest at the foot of the area, fading upward; then faded toward the rim
+            const wash = g.createLinearGradient(0, 1, 0, -1);
+            wash.addColorStop(0, 'rgba(255, 216, 150, 0.62)');
+            wash.addColorStop(0.6, 'rgba(255, 206, 138, 0.34)');
+            wash.addColorStop(1, 'rgba(255, 200, 130, 0.1)');
+            const rim = g.createRadialGradient(0, 0, 0.35, 0, 0, 1);
+            rim.addColorStop(0, 'rgba(0,0,0,1)');
+            rim.addColorStop(1, 'rgba(0,0,0,0)');
+            const t = tmp.getContext('2d');
+            t.clearRect(0, 0, 64, 64);
+            t.globalCompositeOperation = 'source-over';
+            t.save();
+            t.translate(32, 32);
+            t.scale(32, 32);
+            t.fillStyle = wash;
+            t.fillRect(-1, -1, 2, 2);
+            t.globalCompositeOperation = 'destination-in';
+            t.fillStyle = rim;
+            t.fillRect(-1, -1, 2, 2);
+            t.restore();
+            g.drawImage(tmp, -1, -1, 2, 2);
+            g.restore();
+        }
+        g.globalCompositeOperation = 'destination-in';
+        g.drawImage(sceneryImg, geom.drawX, geom.drawY, geom.drawW, geom.drawH);
+        g.globalCompositeOperation = 'source-over';
+        floodCache = { key, canvas: c };
+        return c;
+    }
+
+    // k: how strongly the lights are on, 0..1
+    // list: the painting's lights, or the extra lamps along the extended railing (span)
+    function drawLights(f, geom, k, list = ZAGREB_LIGHTS) {
+        if (k <= 0.01) return;
+        const { ctx, t, wx, W, H } = f;
+        const sc = geom.drawW / 1200;
+        const tonight = Math.floor(Date.now() / 86400000);
+        const haze = 1 + wx.fog * 1.2; // fog spreads the glow
+
+        const floorY = geom.drawY + FLOOR_TOP * geom.drawH;
+        // Rain breaks the mirror up: reflections shimmer more and lose a little strength
+        const wet = wx.rain > 0.15 ? 1 : 0;
+
+        const flood = floodLayer(list, geom);
+        if (flood) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'screen';
+            ctx.globalAlpha = k * 0.85;
+            ctx.drawImage(flood, geom.ox, geom.oy);
+            // The floodlit walls again, upside down in the wet floor
+            ctx.beginPath();
+            ctx.rect(0, floorY, W, H - floorY);
+            ctx.clip();
+            ctx.globalAlpha = k * (wet ? 0.26 : 0.34);
+            ctx.translate(0, 2 * (geom.drawY + MIRROR_FAR * geom.drawH));
+            ctx.scale(1, -1);
+            ctx.drawImage(flood, geom.ox, geom.oy);
+            ctx.restore();
+        }
+
+        list.forEach((L, i) => {
+            if (L.t === 'flood') return;
+            const x = geom.drawX + L.x * geom.drawW, y = geom.drawY + L.y * geom.drawH;
+            if (x < -20 || x > W + 20 || y < -20 || y > H + 20) return;
+            // About one window in eight stays dark, a different set each night
+            if (L.t === 'win' && hash01(i * 7.3 + tonight) < 0.12) return;
+
+            const flick = 1 + Math.sin(t * (0.5 + hash01(i) * 1.2) + i * 1.7) * 0.07 + Math.sin(t * 0.23 + i) * 0.04;
+            // Distant pinpoints twinkle through the air; nearer lights only breathe
+            const a = clamp(k * (L.t === 'far' ? 0.55 + 0.45 * Math.sin(t * (1.1 + hash01(i) * 1.6) + i * 3.1) : flick));
+            const rw = Math.max(1.2, L.w * sc), rh = Math.max(1.2, L.h * sc);
+            const rgb = (L.t === 'clock' ? [255, 246, 220] : L.t === 'lamp' ? [255, 226, 160] : TINT[L.c] || TINT.amber).join(',');
+
+            // Reflection in the wet terrace: same spot mirrored, dimmer and smeared downward
+            const ry = geom.drawY + (2 * (L.t === 'lamp' ? MIRROR_NEAR : MIRROR_FAR) - L.y) * geom.drawH;
+            if (ry > floorY && ry < H + 10) {
+                const shimmer = Math.sin(t * (wet ? 2.6 : 0.7) + i * 2.3);
+                const rx = x + shimmer * (wet ? 0.9 : 0.35) * sc;
+                const frost = LIGHT ? LIGHT.frost : 0; // ice reflects less sharply than water
+                const ra = a * (wet ? 0.3 : 0.4) * (0.85 + 0.15 * shimmer) * (1 - 0.45 * frost);
+                const sw = Math.max(rw, 1.4) * 1.3, sh = Math.max(rh, rw) * (wet ? 3.4 : 2.6);
+                ctx.save();
+                ctx.translate(rx, ry);
+                ctx.scale(1, sh / sw);
+                const rg = ctx.createRadialGradient(0, 0, 0, 0, 0, sw);
+                rg.addColorStop(0, `rgba(${rgb},${ra.toFixed(3)})`);
+                rg.addColorStop(0.45, `rgba(${rgb},${(ra * 0.4).toFixed(3)})`);
+                rg.addColorStop(1, `rgba(${rgb},0)`);
+                ctx.fillStyle = rg;
+                ctx.fillRect(-sw, -sw, sw * 2, sw * 2);
+                ctx.restore();
+            }
+
+
+            // Tight glow around the source
+            const bloom = Math.max(rw, rh) * (L.t === 'lamp' ? 3.2 : L.t === 'clock' ? 2.2 : 1.5) * haze;
+            const g = ctx.createRadialGradient(x, y, 0, x, y, bloom);
+            g.addColorStop(0, `rgba(${rgb},${(a * (L.t === 'lamp' ? 0.5 : 0.3)).toFixed(3)})`);
+            g.addColorStop(1, `rgba(${rgb},0)`);
+            ctx.fillStyle = g;
+            ctx.fillRect(x - bloom, y - bloom, bloom * 2, bloom * 2);
+
+            ctx.fillStyle = `rgba(${rgb},${(a * 0.92).toFixed(3)})`;
+            if (L.t === 'win') {
+                ctx.fillRect(x - rw / 2, y - rh / 2, rw, rh);
+            } else if (L.t === 'tower') {
+                // Arched opening: a rectangle with a rounded top
+                ctx.beginPath();
+                ctx.moveTo(x - rw / 2, y + rh / 2);
+                ctx.lineTo(x - rw / 2, y - rh / 2 + rw / 2);
+                ctx.arc(x, y - rh / 2 + rw / 2, rw / 2, Math.PI, 0, false);
+                ctx.lineTo(x + rw / 2, y + rh / 2);
+                ctx.closePath();
+                ctx.fill();
+            } else {
+                ctx.beginPath();
+                ctx.arc(x, y, rw / 2, 0, 6.2832);
+                ctx.fill();
+                if (L.t === 'lamp') {
+                    // Faint pool of light under the lamp
+                    ctx.fillStyle = `rgba(${rgb},${(a * 0.1).toFixed(3)})`;
+                    ctx.beginPath();
+                    ctx.ellipse(x, y + rw * 2.5, rw * 5 * haze, rw * 1.6, 0, 0, 6.2832);
+                    ctx.fill();
+                }
+            }
+        });
+    }
+
+    function drawMoon(f, p, m) {
+        const { ctx } = f;
+        if (m.lit < 0.03) return; // new moon: nothing to see
+
+        // Halo: the fuller the moon, the wider and brighter
+        const haloR = p.r * (2.2 + 2.2 * m.lit);
+        const g = ctx.createRadialGradient(p.x, p.y, p.r * 0.6, p.x, p.y, haloR);
+        g.addColorStop(0, `rgba(205, 220, 250, ${(0.32 * m.lit).toFixed(3)})`);
+        g.addColorStop(0.45, `rgba(160, 190, 240, ${(0.10 * m.lit).toFixed(3)})`);
+        g.addColorStop(1, 'rgba(150, 185, 240, 0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(p.x - haloR, p.y - haloR, haloR * 2, haloR * 2);
+
+        const disc = moonDisc(p.r, m);
+        ctx.drawImage(disc, p.x - disc.width / 2, p.y - disc.height / 2);
+    }
+
+    // ------------------------------------------------------------------
+    // Clouds and the lit scenery layer
+    // ------------------------------------------------------------------
+    // Cloud shapes are white masks built once from soft overlapping puffs; each frame's colours
+    // are stamped onto copies only when the light changes.
+    const CLOUD_VARIANTS = 4;
+    let cloudMasks = null;
+    function buildCloudMasks() {
+        const masks = [];
+        for (let v = 0; v < CLOUD_VARIANTS; v++) {
+            const rnd = rng(v * 977 + 13);
+            const body = document.createElement('canvas');
+            body.width = 256;
+            body.height = 128;
+            const g = body.getContext('2d');
+            // A heap of puffs: big ones low in the middle, small ones bubbling up along the top
+            for (let i = 0; i < 22; i++) {
+                const big = i < 7;
+                const x = big ? 64 + rnd() * 128 : 56 + rnd() * 144;
+                const hump = clamp(1 - Math.pow((x - 128) / 100, 2));
+                const r = big ? 20 + 16 * rnd() : 9 + 12 * rnd();
+                const y = big ? 92 - r * 0.7 : 92 - (18 + 46 * hump * rnd()) - r * 0.3;
+                const puff = g.createRadialGradient(x, y, r * 0.35, x, y, r);
+                puff.addColorStop(0, 'rgba(255,255,255,1)');
+                puff.addColorStop(0.72, 'rgba(255,255,255,0.88)');
+                puff.addColorStop(1, 'rgba(255,255,255,0)');
+                g.fillStyle = puff;
+                g.fillRect(x - r, y - r, r * 2, r * 2);
+            }
+            // Flat, soft base
+            g.globalCompositeOperation = 'destination-out';
+            const base = g.createLinearGradient(0, 90, 0, 110);
+            base.addColorStop(0, 'rgba(0,0,0,0)');
+            base.addColorStop(1, 'rgba(0,0,0,1)');
+            g.fillStyle = base;
+            g.fillRect(0, 90, 256, 38);
+
+            const lower = (from, to) => {
+                const c = document.createElement('canvas');
+                c.width = 256;
+                c.height = 128;
+                const x = c.getContext('2d');
+                x.drawImage(body, 0, 0);
+                x.globalCompositeOperation = 'destination-in';
+                const fade = x.createLinearGradient(0, from, 0, to);
+                fade.addColorStop(0, 'rgba(0,0,0,0)');
+                fade.addColorStop(1, 'rgba(0,0,0,1)');
+                x.fillStyle = fade;
+                x.fillRect(0, 0, 256, 128);
+                return c;
+            };
+            masks.push({ body, shade: lower(48, 96), under: lower(74, 98) });
+        }
+        return masks;
+    }
+    function stamp(mask, color) {
+        const c = document.createElement('canvas');
+        c.width = mask.width;
+        c.height = mask.height;
+        const x = c.getContext('2d');
+        x.drawImage(mask, 0, 0);
+        x.globalCompositeOperation = 'source-in';
+        x.fillStyle = color;
+        x.fillRect(0, 0, c.width, c.height);
+        return c;
+    }
+    let cloudCache = { key: '', sprites: null };
+    function cloudSprites(L) {
+        const key = [L.cloudLit, L.cloudShade, L.glow, L.sheet].join('|');
+        if (cloudCache.key === key) return cloudCache.sprites;
+        cloudMasks = cloudMasks || buildCloudMasks();
+        const sprites = cloudMasks.map(m => ({
+            body: stamp(m.body, L.cloudLit),
+            shade: stamp(m.shade, L.cloudShade),
+            under: stamp(m.under, L.glow),
+            sheet: stamp(m.body, L.sheet)
+        }));
+        cloudCache = { key, sprites };
+        return sprites;
+    }
+
+    // Half-frozen terrace: milky sheets of ice with a few hairline cracks lie on the water, and
+    // open wet patches stay between them. Sheets are small and flat far away, large near the eye.
+    // Their places are fixed (seeded), so the ice does not jump when the light changes.
+    const ICE = [];
+    (function seedIce() {
+        const rnd = rng(8128);
+        for (let i = 0; i < 46; i++) {
+            const d = Math.pow(rnd(), 0.8); // 0 at the railing, 1 at the bottom edge
+            ICE.push({ x: rnd() * 1.1 - 0.05, d, w: 0.7 + rnd() * 0.9, a: 0.55 + rnd() * 0.45, tilt: (rnd() - 0.5) * 0.25, crack: rnd() });
+        }
+    })();
+    function drawIce(x, L, layer = L.geom) {
+        const g0 = L.geom;
+        const floorY = g0.drawY + FLOOR_TOP * g0.drawH, bottom = g0.drawY + g0.drawH;
+        const light = 0.3 + 0.7 * L.lum; // ice is only as bright as the light on it
+        x.save();
+        x.globalCompositeOperation = 'source-over';
+        // A matte film over the whole floor dulls the mirror (full-canvas gradient, no edge)
+        const film = x.createLinearGradient(0, floorY - g0.drawH * 0.01, 0, bottom);
+        film.addColorStop(0, 'rgba(206, 222, 236, 0)');
+        film.addColorStop(0.1, `rgba(206, 222, 236, ${(0.16 * L.frost * light).toFixed(3)})`);
+        film.addColorStop(1, `rgba(214, 228, 240, ${(0.24 * L.frost * light).toFixed(3)})`);
+        x.fillStyle = film;
+        x.fillRect(layer.ox, layer.oy, layer.W, layer.H);
+
+        const n = Math.round(ICE.length * (0.35 + 0.65 * L.frost));
+        for (let i = 0; i < n; i++) {
+            const s = ICE[i];
+            const cx = g0.drawX + s.x * g0.drawW, cy = floorY + (0.04 + 0.96 * s.d) * (bottom - floorY);
+            const rx = g0.drawW * (0.03 + 0.11 * s.d) * s.w, ry = rx * (0.16 + 0.1 * s.d);
+            x.save();
+            x.translate(cx, cy);
+            x.rotate(s.tilt * 0.2);
+            x.scale(rx, ry);
+            const sheet = x.createRadialGradient(0, 0, 0.25, 0, 0, 1);
+            const a = 0.42 * s.a * L.frost * light;
+            sheet.addColorStop(0, `rgba(224, 236, 246, ${a.toFixed(3)})`);
+            sheet.addColorStop(0.78, `rgba(214, 230, 244, ${(a * 0.85).toFixed(3)})`);
+            sheet.addColorStop(1, 'rgba(214, 230, 244, 0)');
+            x.fillStyle = sheet;
+            x.fillRect(-1, -1, 2, 2);
+            x.restore();
+            if (s.crack > 0.55) {
+                // A hairline crack across the sheet
+                x.strokeStyle = `rgba(245, 250, 255, ${(0.3 * L.frost * light).toFixed(3)})`;
+                x.lineWidth = Math.max(0.5, g0.drawW / 1200 * (0.6 + 0.8 * s.d));
+                x.beginPath();
+                x.moveTo(cx - rx * 0.7, cy + ry * (s.crack - 0.8));
+                x.lineTo(cx - rx * 0.1, cy - ry * 0.25 * s.tilt * 4);
+                x.lineTo(cx + rx * 0.25, cy + ry * 0.2);
+                x.lineTo(cx + rx * 0.75, cy - ry * (s.crack - 0.6));
+                x.stroke();
+            }
+        }
+        x.restore();
+    }
+
+    // The hour's light on a layer of scenery, exactly as the painting gets it. x: a context whose
+    // transform maps world coordinates onto its canvas; g0: the layer's rectangle (ox, oy, W, H)
+    // plus the painting's placement (drawX/Y/W/H); drawBase(x): paints the unlit layer, and is
+    // used again at the end as the outline that cuts the light back off the sky.
+    function lightLayer(x, L, g0, drawBase) {
+        x.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in x) x.imageSmoothingQuality = 'high';
+        drawBase(x);
+        const fill = () => x.fillRect(g0.ox, g0.oy, g0.W, g0.H);
+
+        x.globalCompositeOperation = 'multiply';
+        if (L.tintA > 0.01) {
+            x.fillStyle = rgba(L.tint, L.tintA);
+            fill();
+        }
+        if (L.washA > 0.01) {
+            x.fillStyle = rgba(L.wash, L.washA);
+            fill();
+        }
+        if (L.warmA > 0.01) {
+            // Low sun: warm light falling across the scene from the sun's side
+            x.globalCompositeOperation = 'overlay';
+            const warm = x.createRadialGradient(L.sunX, L.horizonY, 0, L.sunX, L.horizonY, L.geom.W * 0.95);
+            warm.addColorStop(0, rgba(L.glow, L.warmA));
+            warm.addColorStop(1, rgba(L.glow, 0));
+            x.fillStyle = warm;
+            fill();
+        }
+        if (L.moonA > 0.01) {
+            x.globalCompositeOperation = 'screen';
+            const moon = x.createLinearGradient(0, L.geom.oy, 0, L.geom.oy + L.geom.H);
+            moon.addColorStop(0, `rgba(65, 100, 165, ${(0.2 * L.moonA).toFixed(3)})`);
+            moon.addColorStop(0.5, `rgba(45, 75, 130, ${(0.1 * L.moonA).toFixed(3)})`);
+            moon.addColorStop(1, 'rgba(25, 40, 80, 0)');
+            x.fillStyle = moon;
+            fill();
+        }
+        if (L.haze > 0.02) {
+            // Air between here and the town: thickest at the skyline, thin on the terrace
+            x.globalCompositeOperation = 'source-over';
+            const hy = L.horizonY, bottom = g0.drawY + g0.drawH;
+            const air = x.createLinearGradient(0, hy - g0.drawH * 0.2, 0, bottom);
+            air.addColorStop(0, rgba(L.hor, L.haze));
+            air.addColorStop(0.3, rgba(L.hor, L.haze * 0.92));
+            air.addColorStop(0.5, rgba(L.hor, L.haze * 0.3));
+            air.addColorStop(1, rgba(L.hor, L.haze * 0.1));
+            x.fillStyle = air;
+            fill();
+        }
+        const skyA = clamp(L.lowSun * 1.2) * L.cs * 0.6;
+        if (skyA > 0.02) {
+            // The wet terrace mirrors the sky: at dawn and dusk it takes the horizon's colour
+            // (hue only, the painted reflections keep their light and dark)
+            x.globalCompositeOperation = 'color';
+            const floorY = g0.drawY + FLOOR_TOP * g0.drawH;
+            const mirror = x.createLinearGradient(0, floorY - g0.drawH * 0.02, 0, g0.drawY + g0.drawH);
+            mirror.addColorStop(0, rgba(L.hor, 0));
+            mirror.addColorStop(0.12, rgba(L.hor, skyA));
+            mirror.addColorStop(1, rgba(L.mid, skyA * 0.8));
+            x.fillStyle = mirror;
+            fill();
+        }
+        if (L.frost > 0.05) drawIce(x, L, g0);
+        if (L.snowCover > 0.05) {
+            // Lying snow: the whole scene pales a little, the open terrace floor most of all.
+            // One full-canvas gradient, so there is no edge anywhere.
+            x.globalCompositeOperation = 'screen';
+            const b = 0.25 + 0.75 * L.lum; // snow is only as bright as the light on it
+            const snow = x.createLinearGradient(0, g0.drawY + g0.drawH * 0.45, 0, g0.drawY + g0.drawH);
+            snow.addColorStop(0, `rgba(226, 234, 244, ${(0.10 * L.snowCover * b).toFixed(3)})`);
+            snow.addColorStop(0.45, `rgba(232, 239, 247, ${(0.20 * L.snowCover * b).toFixed(3)})`);
+            snow.addColorStop(1, `rgba(238, 243, 250, ${(0.40 * L.snowCover * b).toFixed(3)})`);
+            x.fillStyle = snow;
+            fill();
+        }
+        // Cut everything back to the layer's own outline (bare winter trees let the sky through)
+        x.globalCompositeOperation = 'destination-in';
+        drawBase(x);
+        x.globalCompositeOperation = 'source-over';
+    }
+
+    // The scenery with the hour's light on it, on its own canvas so the tint never touches the
+    // sky. Redrawn only when the light changes.
+    let sceneCache = { key: '', canvas: null };
+    function sceneLayer(L) {
+        if (sceneCache.key === L.key) return sceneCache.canvas;
+        const g0 = L.geom;
+        const c = sceneCache.canvas || document.createElement('canvas');
+        c.width = g0.W;
+        c.height = g0.H;
+        const x = c.getContext('2d');
+        x.setTransform(1, 0, 0, 1, -g0.ox, -g0.oy); // the canvas covers only the scene rectangle
+        lightLayer(x, L, g0, ctx => ctx.drawImage(L.art, g0.drawX, g0.drawY, g0.drawW, g0.drawH));
+        sceneCache = { key: L.key, canvas: c };
+        return c;
+    }
+
+    // ------------------------------------------------------------------
+    // Span only: frosted milk-glass side displays matched to the main scene
+    // ------------------------------------------------------------------
+    // Side displays sample the live sky/clouds plus a ping-pong mirrored copy of the outer 35%
+    // of the lit painting, blur them heavily so no shapes remain visible, and cover them with
+    // an adaptive day/night milk-glass finish and subtle etched-glass micro-grain.
+    const GLASS_STRIP_FRAC = 0.35;
+    const GLASS_SCALE = 10;
+    const GLASS_PAD = 18;
+    const GLASS_BLUR_PX = 8;
+    const glassBuf = { work: null, blurred: null, grain: null };
+
+    function glassCanvas(slot, w, h) {
+        const c = glassBuf[slot] || (glassBuf[slot] = document.createElement('canvas'));
+        if (c.width !== w || c.height !== h) {
+            c.width = w;
+            c.height = h;
+        }
+        return c;
+    }
+
+    // Subtle monochrome etched-glass noise tile, generated once
+    function glassGrainPattern(ctx) {
+        if (!glassBuf.grain) {
+            const size = 128;
+            const c = glassBuf.grain = document.createElement('canvas');
+            c.width = c.height = size;
+            const g = c.getContext('2d');
+            const img = g.createImageData(size, size);
+            const d = img.data;
+            const rnd = rng(4242);
+            for (let i = 0; i < d.length; i += 4) {
+                const v = rnd() > 0.5 ? 255 : 0;
+                d[i] = d[i + 1] = d[i + 2] = v;
+                d[i + 3] = Math.round(rnd() * 90);
+            }
+            g.putImageData(img, 0, 0);
+        }
+        return ctx.createPattern(glassBuf.grain, 'repeat');
+    }
+
+    // Stretch the 1px border of [pad, pad, sw, sh] into the outer padding so blur() never darkens edges
+    function padWorkEdges(g, pad, sw, sh) {
+        const c = g.canvas;
+        g.drawImage(c, pad, pad, 1, sh, 0, pad, pad, sh);
+        g.drawImage(c, pad + sw - 1, pad, 1, sh, pad + sw, pad, pad, sh);
+        g.drawImage(c, 0, pad, sw + pad * 2, 1, 0, 0, sw + pad * 2, pad);
+        g.drawImage(c, 0, pad + sh - 1, sw + pad * 2, 1, 0, pad + sh, sw + pad * 2, pad);
+    }
+
+    // Ping-pong mirror the outer strip of the lit scene onto the small working canvas
+    function drawMirroredStrip(wg, scene, L, side, rect, pad, sw, sh) {
+        const { RX, RY, RW, RH } = WORLD;
+        const stripWorldW = Math.max(24, RW * GLASS_STRIP_FRAC);
+        const stripSrcW = Math.max(24, Math.round(scene.width * GLASS_STRIP_FRAC));
+        const kx = sw / rect.w;
+        const ky = sh / rect.h;
+        const seamX = side < 0 ? RX : RX + RW;
+        const sy0 = pad + (RY - rect.y) * ky;
+        const dstH = RH * ky;
+        const dstBottom = pad + sh;
+
+        wg.save();
+        wg.beginPath();
+        wg.rect(pad, pad, sw, sh);
+        wg.clip();
+        wg.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in wg) wg.imageSmoothingQuality = 'high';
+
+        const maxDist = side < 0 ? Math.max(0, seamX - rect.x) : Math.max(0, rect.x + rect.w - seamX);
+        const kStart = Math.max(0, Math.floor((side < 0 ? seamX - (rect.x + rect.w) : rect.x - seamX) / stripWorldW));
+        const kEnd = Math.ceil(maxDist / stripWorldW);
+
+        const srcX = side < 0 ? 0 : scene.width - stripSrcW;
+        // Bottom terrace sample to extend downward smoothly onto taller portrait displays
+        const floorSrcH = Math.max(4, Math.round(scene.height * 0.08));
+        const floorSrcY = scene.height - floorSrcH;
+
+        for (let k = kStart; k <= kEnd; k++) {
+            const tileA = seamX + side * k * stripWorldW;
+            const tileB = seamX + side * (k + 1) * stripWorldW;
+            const leftW = Math.min(tileA, tileB);
+            const dx = pad + (leftW - rect.x) * kx;
+            const dw = stripWorldW * kx;
+            // Even tiles mirror outward from the seam; odd tiles reverse back for C0 continuity
+            const mirror = (k % 2 === 0);
+
+            wg.save();
+            if (mirror) {
+                wg.translate(dx + dw, 0);
+                wg.scale(-1, 1);
+                wg.drawImage(scene, srcX, 0, stripSrcW, scene.height, 0, sy0, dw + 0.5, dstH);
+                if (sy0 + dstH < dstBottom) {
+                    wg.drawImage(scene, srcX, floorSrcY, stripSrcW, floorSrcH, 0, sy0 + dstH - 0.5, dw + 0.5, dstBottom - (sy0 + dstH) + 1);
+                }
+            } else {
+                wg.drawImage(scene, srcX, 0, stripSrcW, scene.height, dx, sy0, dw + 0.5, dstH);
+                if (sy0 + dstH < dstBottom) {
+                    wg.drawImage(scene, srcX, floorSrcY, stripSrcW, floorSrcH, dx, sy0 + dstH - 0.5, dw + 0.5, dstBottom - (sy0 + dstH) + 1);
+                }
+            }
+            wg.restore();
+        }
+        wg.restore();
+    }
+
+    function drawExtension(f) {
+        if (!WORLD.span || sceneryHidden || !imgLoaded || sceneryImg.naturalWidth === 0) return;
+        const L = LIGHT;
+        if (!L) return;
+        const { RX, RW, OX, OY } = WORLD;
+        const vx0 = OX, vx1 = OX + S.W;
+        const scene = sceneLayer(L);
+        const ctx = f.ctx;
+
+        for (const side of [-1, 1]) {
+            const a = Math.max(vx0, side < 0 ? 0 : RX + RW), b = Math.min(vx1, side < 0 ? RX : WORLD.DW);
+            if (b - a < 1) continue;
+            const rect = { x: Math.floor(a), y: OY, w: Math.ceil(b - a), h: S.H };
+
+            const sw = clamp(Math.round(rect.w / GLASS_SCALE), 48, 280) | 0;
+            const sh = clamp(Math.round(rect.h / GLASS_SCALE), 48, 280) | 0;
+            const pad = GLASS_PAD;
+            const ww = sw + pad * 2, wh = sh + pad * 2;
+            const work = glassCanvas('work', ww, wh);
+            const wg = work.getContext('2d');
+            wg.setTransform(1, 0, 0, 1, 0, 0);
+            wg.clearRect(0, 0, ww, wh);
+            wg.imageSmoothingEnabled = true;
+            if ('imageSmoothingQuality' in wg) wg.imageSmoothingQuality = 'high';
+
+            // 1. Copy the live sky and drifting clouds already drawn on this side slice
+            const sx = rect.x - OX, sy = rect.y - OY;
+            wg.drawImage(ctx.canvas, sx, sy, rect.w, rect.h, pad, pad, sw, sh);
+
+            // 2. Overlay the ping-pong mirrored outer 35% of the lit painting
+            drawMirroredStrip(wg, scene, L, side, rect, pad, sw, sh);
+            padWorkEdges(wg, pad, sw, sh);
+
+            // 3. Heavy blur at downscaled resolution so no shapes remain visible
+            const blurred = glassCanvas('blurred', ww, wh);
+            const bg = blurred.getContext('2d');
+            bg.setTransform(1, 0, 0, 1, 0, 0);
+            bg.clearRect(0, 0, ww, wh);
+            bg.save();
+            bg.filter = `blur(${GLASS_BLUR_PX}px)`;
+            bg.drawImage(work, 0, 0);
+            bg.restore();
+
+            // 4. Draw back onto the world slice and apply the adaptive milk-glass finish
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(rect.x, rect.y, rect.w, rect.h);
+            ctx.clip();
+            ctx.imageSmoothingEnabled = true;
+            if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(blurred, pad, pad, sw, sh, rect.x, rect.y, rect.w, rect.h);
+
+            const lum = L.lum;
+            // Adaptive milky frost: cool translucent white in daylight/dusk, dark smoked-frost at night
+            const frostA = 0.045 + 0.235 * Math.pow(lum, 0.78);
+            ctx.fillStyle = `rgba(228, 236, 246, ${frostA.toFixed(3)})`;
+            ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+            if (lum < 0.35) {
+                const smokeA = (1 - lum / 0.35) * 0.14;
+                ctx.fillStyle = `rgba(8, 13, 22, ${smokeA.toFixed(3)})`;
+                ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+            }
+
+            // Subtle vertical light diffusion across the frosted glass pane
+            const sheen = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.h);
+            sheen.addColorStop(0, `rgba(255, 255, 255, ${(0.015 + 0.075 * lum).toFixed(3)})`);
+            sheen.addColorStop(0.5, 'rgba(255, 255, 255, 0)');
+            sheen.addColorStop(1, `rgba(12, 18, 28, ${(0.04 + 0.04 * (1 - lum)).toFixed(3)})`);
+            ctx.fillStyle = sheen;
+            ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+            // Faint etched-glass micro-grain
+            const pat = glassGrainPattern(ctx);
+            if (pat) {
+                ctx.globalAlpha = 0.03 + 0.04 * lum;
+                ctx.fillStyle = pat;
+                ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+            }
+            ctx.restore();
+        }
+    }
+
+    let flakeCanvas = null;
+    function snowSprite() {
+        if (flakeCanvas) return flakeCanvas;
+        const c = flakeCanvas = document.createElement('canvas');
+        c.width = c.height = 32;
+        const g = c.getContext('2d');
+        const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+        grad.addColorStop(0, 'rgba(255,255,255,1)');
+        grad.addColorStop(0.35, 'rgba(250,252,255,0.85)');
+        grad.addColorStop(0.7, 'rgba(245,249,255,0.3)');
+        grad.addColorStop(1, 'rgba(245,249,255,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 32, 32);
+        return c;
+    }
+
+    // ------------------------------------------------------------------
+    // The scene's layers, called in order by frame() below
+    // ------------------------------------------------------------------
+    const zagrebStyle = {
+        // Gentle wind: rain leans at most about 15 degrees and clouds drift slowly even in a gale
+        tune: { slantBase: 0.04, slantWind: 0.22, snowWind: 1.7, hailBase: 0.03, hailWind: 0.1, cloudBase: 0.004, cloudWind: 0.012 },
+
+        // Rain, snow and fog take their brightness from the hour, so they never look pasted on
+        palette(wx) {
+            const lum = LIGHT ? LIGHT.lum : 1;
+            const k = 0.3 + 0.7 * lum;
+            return {
+                rain: `rgba(215, 230, 245, ${(0.45 * k).toFixed(3)})`,
+                ice: `rgba(225, 242, 255, ${(0.65 * k).toFixed(3)})`,
+                snow: `rgba(250, 252, 255, ${(0.85 * (0.45 + 0.55 * lum)).toFixed(3)})`,
+                hail: `rgba(235, 245, 255, ${(0.88 * (0.45 + 0.55 * lum)).toFixed(3)})`,
+                fog: LIGHT ? LIGHT.fog : '#cad3de',
+                glow: '#ffe8b5',
+                veil: '#16191f'
+            };
+        },
+
+        sky(f) {
+            const { ctx, W, H, wx, t } = f;
+            const L = computeLight(f);
+            const hy = clamp(L.horizonY / H, 0.2, 0.95);
+
+            // Sky: zenith to the hill line, in full-canvas gradients only
+            const sky = ctx.createLinearGradient(0, 0, 0, H);
+            sky.addColorStop(0, L.top);
+            sky.addColorStop(hy * 0.55, L.mid);
+            sky.addColorStop(hy, L.hor);
+            sky.addColorStop(1, L.hor);
+            ctx.fillStyle = sky;
+            ctx.fillRect(0, 0, W, H);
+
+            // Twilight glow over the sun's place on the horizon, and the pink band opposite it
+            const glowAt = (x, color, a, squash, radius) => {
+                if (a <= 0.01) return;
+                ctx.save();
+                ctx.translate(x, L.horizonY);
+                ctx.scale(1, squash);
+                const g = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
+                g.addColorStop(0, rgba(color, a));
+                g.addColorStop(0.35, rgba(color, a * 0.45));
+                g.addColorStop(1, rgba(color, 0));
+                ctx.fillStyle = g;
+                ctx.fillRect(-W * 2, -H * 4, W * 4, H * 8);
+                ctx.restore();
+            };
+            glowAt(L.sunX, L.glow, L.glowA, 0.6, Math.max(f.RW, f.RH) * 0.8);
+            glowAt(W - L.sunX, '#d98fae', L.pinkA, 0.45, f.RW * 0.7);
+
+            // Stars come out through dusk and fade behind cloud and fog
+            if (L.starVis > 0.05) {
+                ctx.save();
+                const nStars = Math.min(STAR_MAX, Math.round(STAR_COUNT * (W * H) / (f.RW * f.RH)));
+                for (let i = 0; i < nStars; i++) {
+                    const s = STARS[i];
+                    const alpha = L.starVis * (0.4 + 0.6 * Math.sin(t * s.speed + s.twinkle));
+                    if (alpha <= 0.02) continue;
+                    ctx.fillStyle = `rgba(235, 245, 255, ${alpha.toFixed(3)})`;
+                    ctx.beginPath();
+                    ctx.arc(s.x * W, s.y * H, s.r, 0, 6.2832);
+                    ctx.fill();
+                }
+                ctx.restore();
+            }
+
+            drawSun(f, L);
+            if (L.moonVis > 0.02) {
+                ctx.save();
+                ctx.globalAlpha = L.moonVis;
+                drawMoon(f, { x: L.moonX, y: L.moonY, r: Math.min(f.RW, f.RH) * 0.05 }, L.moon);
+                ctx.restore();
+            }
+
+            // Rainbow: possible only with the sun up but lower than 42 degrees, and never in rain,
+            // snow, hail, fog, heavy cloud or at night. When daytime rain clears there is a 20%
+            // chance of one, lasting up to an hour.
+            const now = performance.now();
+            const possible = L.alt > 0.5 && L.alt < 42 && !(wx.snow > 0 || wx.hail > 0 || wx.fog > 0.4 || wx.rain > 0.05 || wx.cloud > 0.55);
+            let targetRainbow = 0;
+            if (!possible) rainbowActiveUntil = 0;
+            else if (lastHadRain && Math.random() < 0.20) rainbowActiveUntil = now + 3600 * 1000;
+            if (possible && now < rainbowActiveUntil) targetRainbow = 0.85 * (0.5 + 0.5 * L.cs);
+            lastHadRain = wx.rain > 0.15;
+            f.st.rainbowAlpha = (f.st.rainbowAlpha || 0) + (targetRainbow - (f.st.rainbowAlpha || 0)) * Math.min(1, f.dt * 1.5);
+            drawRainbow(f, L, f.st.rainbowAlpha);
+        },
+
+        // Snow: soft flakes at different distances. Far ones are small and faint, most are mid-sized,
+        // and a few close to the eye are large, blurred and nearly transparent.
+        snow(f, list) {
+            const { ctx, wx } = f;
+            const lum = LIGHT ? LIGHT.lum : 1;
+            const flake = snowSprite();
+            const bright = 0.4 + 0.6 * lum;
+            ctx.save();
+            for (const p of list) {
+                const near = p.s > 0.95; // about one flake in twenty drifts past close up
+                const depth = (p.z - 0.4) / 0.6; // 0 far .. 1 near
+                const size = wx.grains ? p.r * 1.6 : near ? p.r * (2.2 + 1.4 * depth) : p.r * (0.75 + 1.0 * depth * depth);
+                ctx.globalAlpha = (near ? 0.26 : 0.4 + 0.5 * depth) * bright;
+                ctx.drawImage(flake, p.x - size, p.y - size, size * 2, size * 2);
+            }
+            ctx.restore();
+        },
+
+        // Soft clouds lit by the hour: separate puffs in fair weather, one grey sheet with darker
+        // patches when it is overcast, raining or stormy. Far clouds sit lower, smaller and paler.
+        cloud(f, c) {
+            // Sizes follow the scene rectangle, so clouds are as big in a span as on one screen
+            const { ctx, wx, RW: W, RH: H } = f;
+            const L = LIGHT;
+            if (!L) return;
+            const spr = cloudSprites(L)[c.seed % CLOUD_VARIANTS];
+            const depth = c.d; // 0.45 far .. 1 near
+
+            ctx.save();
+            if (wx.cloud >= 0.9 || wx.fog > 0.4) {
+                const w = W * (0.8 + 0.5 * c.s), h = w * 0.24;
+                // Snow comes from an even, pale sheet; rain a little more broken; storms heavy
+                ctx.globalAlpha = (wx.thunder ? 0.34 : (wx.snow > 0 || wx.fog > 0.4) ? 0.04 : wx.rain > 0 ? 0.11 : 0.12) * (0.55 + 0.45 * depth);
+                // Spread over the whole sky (storms hang heavier overhead), so the sheet has no edge
+                const band = wx.thunder ? 0.6 : 0.9;
+                ctx.drawImage(spr.sheet, c.px - w / 2, f.RY + (L.horizonY - f.RY) * (0.02 + band * ((c.seed % 89) / 89)) - h / 2, w, h);
+                ctx.restore();
+                return;
+            }
+            const w = c.s * Math.min(W * 0.34, H * 0.46) * (0.4 + 0.6 * depth), h = w * 0.5;
+            const x = c.px - w / 2;
+            const skyH = L.horizonY - f.RY;
+            const y = f.RY + skyH * (0.80 - 0.72 * depth) + ((c.seed % 97) / 97 - 0.5) * skyH * 0.08 - h / 2;
+            const a = 0.5 + 0.42 * depth;
+            ctx.globalAlpha = a;
+            ctx.drawImage(spr.body, x, y, w, h);
+            ctx.globalAlpha = a * 0.6;
+            ctx.drawImage(spr.shade, x, y, w, h);
+            // Low sun: the undersides nearest the sun catch its colour
+            const warm = a * L.lowSun * L.cs * (0.35 + 0.65 * clamp(1 - Math.abs(c.px - L.sunX) / (W * 0.7)));
+            if (warm > 0.02) {
+                ctx.globalAlpha = warm;
+                ctx.drawImage(spr.under, x, y, w, h);
+            }
+            ctx.restore();
+        },
+
+        // Midground / Foreground: Zagreb Terrace & Cathedral Cutout
+        scene(f) {
+            const { ctx, W, H, wx, t } = f;
+
+            // In a span, a display that does not show any of the scene rectangle skips it entirely
+            const inView = WORLD.RX < WORLD.OX + S.W && WORLD.RX + WORLD.RW > WORLD.OX
+                && WORLD.RY < WORLD.OY + S.H && WORLD.RY + WORLD.RH > WORLD.OY;
+            if (inView && !sceneryHidden && imgLoaded && sceneryImg.naturalWidth > 0) {
+                const L = LIGHT || computeLight(f);
+                const geom = L.geom;
+                const { drawX, drawY, drawW, drawH } = geom;
+
+                // 1. The cutout, already lit for this hour and weather
+                ctx.drawImage(sceneLayer(L), geom.ox, geom.oy);
+
+                ctx.save();
+
+                // 2. Night lights: windows, clock, tower openings, lamps and floodlit areas
+                drawLights(f, geom, L.lights);
+
+                // 3. Rain ripples, only on the terrace floor: never on the kerb, the railing or the town
+                if (wx.rain > 0.15) {
+                    const floorTopY = drawY + drawH * FLOOR_TOP;
+                    const floorBottomY = drawY + drawH;
+
+                    ctx.save();
+                    ctx.strokeStyle = L.lum < 0.3 ? 'rgba(160, 190, 240, 0.28)' : 'rgba(255, 255, 255, 0.35)';
+                    const sc = S.scale || 1;
+                    ctx.lineWidth = Math.max(1, Math.round(sc * 0.9));
+
+                    RIPPLES.forEach(rp => {
+                        rp.life += f.dt * rp.speed;
+                        if (rp.life >= 1) {
+                            rp.life = 0;
+                            rp.x = 0.08 + Math.random() * 0.84;
+                            rp.y = RIPPLE_TOP + Math.random() * RIPPLE_SPAN;
+                        }
+                        const rx = drawX + rp.x * drawW;
+                        const ry = drawY + rp.y * drawH;
+
+                        // Rings are smaller far away (near the railing) and larger close to the eye,
+                        // and a ring is drawn only if all of it lies on the floor
+                        const depth = (rp.y - FLOOR_TOP) / (1 - FLOOR_TOP);
+                        const currentR = rp.life * rp.maxR * (0.45 + 0.75 * depth) * sc;
+                        if (rx >= 0 && rx <= W && ry - currentR * 0.35 >= floorTopY + 1 && ry <= Math.min(H, floorBottomY)) {
+                            const alpha = (1 - rp.life) * (0.3 + 0.12 * L.lum);
+                            ctx.globalAlpha = alpha;
+                            ctx.beginPath();
+                            ctx.ellipse(rx, ry, currentR, currentR * 0.35, 0, 0, 6.2832);
+                            ctx.stroke();
+                        }
+                    });
+                    ctx.restore();
+                }
+
+                ctx.restore();
+            }
+        },
+
+        post(f) {
+            const { ctx, W, H, playing, wx } = f;
+
+            // Camera Look: Subtle natural vignette
+            const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.32, W / 2, H / 2, Math.hypot(W, H) * 0.56);
+            vg.addColorStop(0, 'rgba(0,0,0,0)');
+            vg.addColorStop(1, LIGHT && LIGHT.lum < 0.3 ? 'rgba(0,0,0,0.38)' : 'rgba(10,18,30,0.22)');
+            ctx.fillStyle = vg;
+            ctx.fillRect(0, 0, W, H);
+
+            // Calm rules: muted veil, dimming more while playing
+            ctx.fillStyle = rgba('#16191f', playing ? 0.44 : 0.08);
+            ctx.fillRect(0, 0, W, H);
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // Engine: canvas size, particles, the frame and the loop
+    // ------------------------------------------------------------------
+    function resize() {
+        const scale = getScale();
+        S.scale = scale;
+        S.W = Math.max(1, Math.round(window.innerWidth * scale));
+        S.H = Math.max(1, Math.round(window.innerHeight * scale));
+        canvas.width = S.W;
+        canvas.height = S.H;
+        canvas.style.imageRendering = 'auto';
+        ctx.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+        S.prev = null; // a snapshot of the old size cannot be blended
+        S.fade = 0;
+        S.st = {};
+        // This scene needs no grain or vignette layer; keep the overlay canvas clear
+        overlay.width = S.W;
+        overlay.height = S.H;
+        octx.clearRect(0, 0, overlay.width, overlay.height);
+        const p = rng(42);
+        for (const k of Object.keys(POOL)) {
+            S.pools[k] = [];
+            for (let i = 0; i < POOL[k]; i++) S.pools[k].push({ x: p() * S.W * 1.3, y: p() * S.H, z: 0.4 + p() * 0.6, s: p(), dx: 0, dy: 0, r: 1 });
+        }
+        updateWorld();
+    }
+
+    // World geometry for this canvas (see SPAN above); falls back to "the world is this canvas"
+    function updateWorld() {
+        const v = SPAN && SPAN.view, d = SPAN && SPAN.desk, sc = SPAN && SPAN.scene;
+        const ok = v && d && sc && v.w > 0 && v.h > 0 && d.w > 0 && d.h > 0 && sc.w > 0 && sc.h > 0;
+        if (!ok) {
+            Object.assign(WORLD, { span: false, DW: S.W, DH: S.H, OX: 0, OY: 0, RX: 0, RY: 0, RW: S.W, RH: S.H, key: '' });
+            return;
+        }
+        const k = S.W / v.w; // CSS pixels to this canvas's pixels
+        const r = Math.round;
+        Object.assign(WORLD, {
+            span: true, DW: r(d.w * k), DH: r(d.h * k), OX: r(v.x * k), OY: r(v.y * k),
+            RX: r(sc.x * k), RY: r(sc.y * k), RW: r(sc.w * k), RH: r(sc.h * k)
+        });
+        WORLD.key = [WORLD.DW, WORLD.DH, WORLD.RX, WORLD.RY, WORLD.RW, WORLD.RH].join(',');
+    }
+
+    function seedClouds() {
+        const r = rng(7);
+        // A span keeps the same number of clouds per scene-width of sky
+        const widen = WORLD.span ? Math.max(1, WORLD.DW / WORLD.RW) : 1;
+        const n = S.wx.cloud < 0.05 ? 0 : Math.round((3 + S.wx.cloud * 9) * widen);
+        S.clouds = [];
+        for (let i = 0; i < n; i++) {
+            S.clouds.push({ x: r() * 1.5 - 0.25, y: 0.05 + r() * 0.33, s: 0.7 + r() * 0.7, d: 0.45 + r() * 0.55, seed: Math.floor(r() * 1e6) });
+        }
+        for (const c of S.clouds) c.x0 = c.x;
+        S.clouds.sort((a, b) => a.d - b.d);
+    }
+
+    function stepPrecip(dt, t) {
+        const { W, H, wx } = S;
+        const T = zagrebStyle.tune;
+        const mod = wx.showers ? 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 0.22)) : 1;
+        const out = { rain: [], snow: [], hail: [] };
+        const wrap = p => {
+            if (p.y > H + 4) { p.y -= H + 8 + p.s * H * 0.2; p.x = p.s * W * 1.3; p.s = (p.s * 7.13 + 0.31) % 1; }
+            if (p.x < -W * 0.15) p.x += W * 1.3;
+            if (p.x > W * 1.2) p.x -= W * 1.3;
+        };
+        const unit = Math.max(1, H / 300);
+        let n = Math.round(POOL.rain * wx.rain * mod);
+        for (let i = 0; i < n; i++) {
+            const p = S.pools.rain[i];
+            const vy = H * (wx.drizzle ? 0.45 : 1.05) * (0.55 + 0.45 * p.z);
+            const slant = T.slantBase + wx.wind * T.slantWind;
+            p.x -= vy * slant * dt;
+            p.y += vy * dt;
+            wrap(p);
+            const len = H * (wx.drizzle ? 0.012 : 0.03) * p.z;
+            p.dx = -len * slant;
+            p.dy = len;
+            out.rain.push(p);
+        }
+        n = Math.round(POOL.snow * wx.snow * mod);
+        for (let i = 0; i < n; i++) {
+            const p = S.pools.snow[i];
+            p.x += (-H * 0.012 * (1 + wx.wind * T.snowWind) + Math.sin(t * 0.9 + p.s * 20) * H * 0.01) * dt;
+            p.y += H * (wx.grains ? 0.2 : 0.065) * (0.5 + 0.5 * p.z) * dt;
+            wrap(p);
+            p.r = (wx.grains ? 0.5 : 1) * (0.7 + p.z * 1.3) * unit;
+            out.snow.push(p);
+        }
+        n = Math.round(POOL.hail * wx.hail);
+        for (let i = 0; i < n; i++) {
+            const p = S.pools.hail[i];
+            const vy = H * 1.25 * (0.7 + 0.3 * p.z);
+            p.x -= vy * (T.hailBase + wx.wind * T.hailWind) * dt;
+            p.y += vy * dt;
+            wrap(p);
+            p.r = (0.7 + p.z * 0.8) * unit;
+            out.hail.push(p);
+        }
+        return out;
+    }
+
+    function frame(dtReal, playing) {
+        const { W, H, wx } = S;
+        const dt = dtReal * (playing ? 0.25 : 1);
+        S.t += dt;
+        const t = S.t;
+        const pal = zagrebStyle.palette(wx);
+        // f: this canvas (precipitation, vignette, veil); fw: the world (sky, clouds, scene, fog,
+        // lightning). Without a span they are the same size and fw's transform is the identity.
+        const f = { ctx, W, H, wx, t, dt, st: S.st, pal, clouds: S.clouds, playing, RX: 0, RY: 0, RW: W, RH: H };
+        const fw = { ...f, W: WORLD.DW, H: WORLD.DH, RX: WORLD.RX, RY: WORLD.RY, RW: WORLD.RW, RH: WORLD.RH };
+        const toWorld = () => ctx.setTransform(1, 0, 0, 1, -WORLD.OX, -WORLD.OY);
+        const toCanvas = () => ctx.setTransform(1, 0, 0, 1, 0, 0);
+        toWorld();
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+
+        zagrebStyle.sky(fw);
+
+        // Clouds drift with the wind. In a span every display runs its own page, so the clouds'
+        // places come from the wall clock instead of each page's own running time: all displays
+        // agree and a cloud crosses from one to the next.
+        const T = zagrebStyle.tune;
+        const speed = c => (T.cloudBase + wx.wind * T.cloudWind) * c.d * (WORLD.RW / WORLD.DW);
+        const wall = WORLD.span ? (performance.timeOrigin + performance.now()) / 1000 : 0;
+        for (const c of S.clouds) {
+            if (WORLD.span) {
+                c.x = (((c.x0 + 0.3 + wall * speed(c)) % 1.6) + 1.6) % 1.6 - 0.3;
+            } else {
+                c.x += dt * speed(c);
+                if (c.x > 1.3) c.x = -0.3;
+            }
+            c.px = c.x * fw.W;
+        }
+        for (const c of S.clouds) zagrebStyle.cloud(fw, c);
+
+        drawExtension(fw);
+        zagrebStyle.scene(fw);
+
+        // Rain, snow and hail, in front of the scene
+        toCanvas();
+        const pr = stepPrecip(dt, t);
+        if (pr.rain.length) {
+            ctx.strokeStyle = wx.freezing ? pal.ice : pal.rain;
+            ctx.lineWidth = (wx.drizzle ? 0.8 : 1) * (S.scale || 1);
+            ctx.beginPath();
+            for (const p of pr.rain) {
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x + p.dx, p.y + p.dy);
+            }
+            ctx.stroke();
+        }
+        if (pr.snow.length) zagrebStyle.snow(f, pr.snow);
+        if (pr.hail.length) {
+            ctx.fillStyle = pal.hail;
+            ctx.beginPath();
+            for (const p of pr.hail) {
+                ctx.moveTo(p.x + p.r, p.y);
+                ctx.arc(p.x, p.y, p.r, 0, 6.2832);
+            }
+            ctx.fill();
+        }
+
+        // Fog bands
+        toWorld();
+        {
+            const { W, H } = fw;
+            if (wx.fog > 0) {
+                ctx.fillStyle = rgba(pal.fog, wx.fog * 0.16);
+                ctx.fillRect(0, 0, W, H);
+                for (let i = 0; i < 3; i++) {
+                    const y = H * (0.42 + i * 0.17) + Math.sin(t * 0.05 + i * 2) * H * 0.02;
+                    const g = ctx.createLinearGradient(0, y - H * 0.16, 0, y + H * 0.16);
+                    g.addColorStop(0, rgba(pal.fog, 0));
+                    g.addColorStop(0.5, rgba(pal.fog, wx.fog * 0.3));
+                    g.addColorStop(1, rgba(pal.fog, 0));
+                    ctx.fillStyle = g;
+                    ctx.fillRect(0, y - H * 0.16, W, H * 0.32);
+                }
+            }
+
+            // Lightning: a soft glow every 7-15 s, never a white flash, none while playing
+            if (wx.thunder) {
+                const L = S.L;
+                if (playing) {
+                    L.a = 0;
+                } else {
+                    L.next -= dtReal;
+                    if (L.next <= 0) {
+                        L.a = 0.22;
+                        L.x = 0.2 + Math.random() * 0.6;
+                        L.next = 7 + Math.random() * 8;
+                    }
+                    L.a *= Math.pow(0.03, dtReal);
+                }
+                if (L.a > 0.004) {
+                    const x = L.x * W, y = H * 0.16, r = Math.max(W, H) * 0.5;
+                    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+                    g.addColorStop(0, rgba(pal.glow, L.a));
+                    g.addColorStop(1, rgba(pal.glow, 0));
+                    ctx.fillStyle = g;
+                    ctx.fillRect(0, 0, W, H);
+                }
+            }
+        }
+        toCanvas();
+
+        zagrebStyle.post(f);
+
+        // Vibrant look vignette
+        const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.hypot(W, H) * 0.55);
+        vg.addColorStop(0, 'rgba(0,0,0,0)');
+        vg.addColorStop(1, `rgba(0,0,0,${LOOK_VIGNETTE})`);
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, W, H);
+
+        // Calm veil: mute the scene, more while the snake is moving
+        ctx.fillStyle = rgba(pal.veil, playing ? 0.42 : 0.1);
+        ctx.fillRect(0, 0, W, H);
+
+        // A weather change cross-fades from the last picture instead of cutting
+        if (S.prev && S.fade > 0) {
+            ctx.globalAlpha = S.fade;
+            ctx.drawImage(S.prev, 0, 0);
+            ctx.globalAlpha = 1;
+            S.fade -= dtReal / 1.2;
+            if (S.fade <= 0) S.prev = null;
+        }
+        // Nothing is worth showing until the painting itself has arrived
+        if (imgLoaded) S.drawn = true;
+        if (S.shown) show();
+    }
+
+    // The canvases start transparent (CSS) and fade in once there is a picture worth showing
+    function show() {
+        S.shown = true;
+        if (!S.drawn || canvas.classList.contains('wx-ready')) return;
+        canvas.classList.add('wx-ready');
+        overlay.classList.add('wx-ready');
+    }
+
+    const reduced = () => !!(mq && mq.matches);
+    const isPlaying = () => document.body.classList.contains('playing-mode');
+
+    function loop(now) {
+        S.anim = null;
+        if (S.dead || !S.enabled || S.paused || document.hidden) return;
+        if (reduced()) {
+            frame(0, false); // one still picture
+            return;
+        }
+        S.anim = requestAnimationFrame(loop);
+        const elapsed = now - S.last;
+        if (elapsed < FRAME_MS - 1) return;
+        S.last = now;
+        frame(Math.min(elapsed, 100) / 1000, isPlaying());
+    }
+
+    function kick() {
+        if (S.anim) cancelAnimationFrame(S.anim);
+        S.anim = null;
+        if (S.dead) return;
+        const now = performance.now();
+        S.last = now - FRAME_MS;
+        loop(now);
+    }
+
+    const onResize = () => { resize(); kick(); };
+    resize();
+    seedClouds();
+    window.addEventListener('resize', onResize);
+    document.addEventListener('visibilitychange', kick);
+    if (mq && mq.addEventListener) mq.addEventListener('change', kick);
+
+    return {
+        setWeather(code, isDay, windKmh) {
+            // Keep the current picture to fade from, unless nothing has been shown yet
+            if (S.drawn && canvas.classList.contains('wx-ready') && !reduced()) {
+                const snap = document.createElement('canvas');
+                snap.width = S.W; snap.height = S.H;
+                snap.getContext('2d').drawImage(canvas, 0, 0);
+                S.prev = snap;
+                S.fade = 1;
+            }
+            S.wx = wxFor(code, isDay, windKmh);
+            seedClouds();
+            kick();
+        },
+        // Where the weather city is, its clock and its temperature (null = not known yet)
+        setEnv(e) {
+            Object.assign(ENV, e);
+            kick();
+        },
+        setEnabled(v) {
+            S.enabled = v;
+            canvas.style.display = overlay.style.display = v ? 'block' : 'none';
+            kick();
+        },
+        start: kick,
+        // Fade the background in (call once the first weather is known, or after a timeout)
+        show() { show(); kick(); },
+        // Test panel: pin the clock (a Date) or the season, or null to follow the real ones
+        setTestClock(date) { TEST.clock = date || null; kick(); },
+        setTestSeason(name) { TEST.season = name || null; kick(); },
+        // Hide the terrace and town while a holiday scene covers the ground (true = hidden)
+        setSceneryHidden(v) { sceneryHidden = !!v; kick(); },
+        // Wallpaper: span one scene over several displays, or null for this canvas alone.
+        // { view: {x,y,w,h}, desk: {w,h}, scene: {x,y,w,h} } in CSS pixels (see SPAN)
+        setLayout(span) {
+            SPAN = span || null;
+            resize();
+            seedClouds();
+            kick();
+        },
+        // Wallpaper: stop drawing and keep the last picture (a window covers the display)
+        setPaused(v) {
+            S.paused = !!v;
+            kick();
+        },
+        // Stop for good and let another background use the canvases
+        dispose() {
+            S.dead = true;
+            if (S.anim) cancelAnimationFrame(S.anim);
+            S.anim = null;
+            window.removeEventListener('resize', onResize);
+            document.removeEventListener('visibilitychange', kick);
+            if (mq && mq.removeEventListener) mq.removeEventListener('change', kick);
+            canvas.style.filter = '';
+        }
+    };
+}

@@ -18,5 +18,25 @@
       <label>Sharp full-resolution mode / Oštra puna rezolucija</label>
       <default>false</default>
     </entry>
+    <entry name="Layout" type="String">
+      <label>Multi-display layout: clone (whole scene on this display) or span (one scene over all displays)</label>
+      <default>clone</default>
+    </entry>
+    <entry name="SceneDisplay" type="String">
+      <label>Span: display (output name) that carries the terrace and the weather card; empty = the largest display</label>
+      <default></default>
+    </entry>
+    <entry name="HeightOffset" type="Int">
+      <label>Span: move this display's part of the picture up (positive) or down (negative), in pixels, to line it up with the displays beside it on the desk</label>
+      <default>0</default>
+    </entry>
+    <entry name="PauseRule" type="String">
+      <label>Pause when a fullscreen or maximized window covers: screen (this display only) or all (any display)</label>
+      <default>screen</default>
+    </entry>
+    <entry name="Bundled" type="Bool">
+      <label>Use the copy bundled with the plugin instead of the online page</label>
+      <default>false</default>
+    </entry>
   </group>
 </kcfg>

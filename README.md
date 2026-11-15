@@ -9,13 +9,14 @@ It reuses the game's Zagreb Cathedral terrace background, physical day/night sun
 
 ## Features
 
-- **No Game Files Modified**: Reads directly from `src/zagreb-bg.js`, `src/sun.js`, `src/zagreb-lights.js`, `src/weather-bg.js`, and `src/i18n.js` during build time.
+- **Self-contained**: the game modules it reuses (`zagreb-bg.js`, `sun.js`, `zagreb-lights.js`, `weather-bg.js`, `i18n.js`) are copied into [`src/game/`](src/game/) from the game repo; `zagreb-bg.js` carries the wallpaper's additions (scale hook, span, pause).
+- **Multiple displays**: *Clone* (the whole scene on every display) or *Span* (one scene over all displays: the terrace and weather card on one display, the same sky, sun, moon, clouds and weather continuing across the others, while the side displays get a newly drawn, simpler continuation at the same height: distant hills, bushes textured with the painting's own foliage, the same railing with lamps, the kerb and the wet floor with reflections, all lit like the painting).
 - **Physical Day & Night Cycle**: Real astronomical sun altitude calculated from local time and city coordinates (smooth transitions through day, golden hour, blue hour, and night).
 - **Realistic Moon & Seasons**: Computes the exact lunar illumination phase and swaps seasonal Zagreb terrace foliage (spring, summer, autumn, winter snow).
 - **Live Weather**: Connects to the free Open-Meteo API with offline cache and fast boot retry. Supports clear, cloudy, rain, snow, fog, thunderstorms, rainbows, and half-frozen terrace in sub-zero temperatures.
 - **Fullscreen Auto-Pause**:
-  - **KDE Plasma 6**: Monitors `org.kde.taskmanager.TasksModel` and freezes `WebEngineView` (`LifecycleState.Frozen`) when any fullscreen or maximized window covers the screen.
-  - **Windows (Lively)**: Uses Lively's native fullscreen/focus pause hooks.
+  - **KDE Plasma 6**: watches `org.kde.taskmanager.TasksModel` for fullscreen or maximized windows on this display (or, by setting, on any display) on the current desktop and activity, and stops the animation while covered, keeping the last frame.
+  - **Windows (Lively)**: follows Lively's own pause rules (`livelyWallpaperPlaybackChanged`).
 - **Always-Visible Weather Card**: Fixed in the top-right corner, styled in the game's dark glass and CRT phosphor theme. Displays city, condition, temperature (°C in HR, °C/°F in EN), sunrise/sunset, and 3-day forecast. All UI elements have `pointer-events: none` so mouse clicks pass through to desktop icons.
 - **Bilingual**: Choice of **Hrvatski** or **English** in settings.
 - **Battery-Friendly / Calm Mode**: 30 FPS cap, calm motion, reduced CPU usage. An optional **Sharp** mode enables native full-resolution rendering.
@@ -24,15 +25,18 @@ It reuses the game's Zagreb Cathedral terrace background, physical day/night sun
 
 ## Building
 
-Requires Node.js (uses the repository's existing `esbuild` dependency).
+Requires Node.js and Python 3 (for the zip archives).
 
 ```bash
-node studio/wallpaper/build.mjs
+npm install
+npm run build
 ```
 
-Outputs:
-1. **KDE Plasma 6 Package**: `studio/wallpaper/dist/kde/skill-issue-wallpaper/`
-2. **Lively Wallpaper Package**: `studio/wallpaper/dist/skill-issue-wallpaper-lively.zip`
+Sources live in [`src/`](src/): [`src/wallpaper/`](src/wallpaper/) is the wallpaper (entry, settings, weather card, Open-Meteo client, build script, Lively manifest), [`src/game/`](src/game/) the game modules it reuses. The build writes:
+1. `web/` — the page deployed to GitHub Pages (`bg/` and `fonts/` there are source assets)
+2. `kde/skill-issue-wallpaper/contents/web/` — offline copy inside the Plasma package
+3. `windows/skill-issue-wallpaper-lively.zip` — Lively package
+4. `releases/` — Linux and Windows setup archives
 
 ---
 
@@ -57,21 +61,22 @@ To enable:
    - **Grad / City**: (e.g. `Zagreb`, `Split`, `Vienna`, `Tokyo`)
    - **Jezik / Language**: `Hrvatski` or `English`
    - **Kvaliteta / Quality**: Check *Sharp* for native full-resolution rendering.
+   - **Raspored / Layout**: *Clone* or *Span*. For Span, choose it on **every** display (Plasma keeps settings per display). Each display's position, size and orientation are read automatically and follow screen changes.
+   - **Zaslon sa scenom / Scene display**: which display carries the terrace and weather card in Span; *Automatic* picks the largest.
+   - **Poravnanje visine / Height alignment**: on the side displays, shift the picture up (+) or down (−) in pixels until the railing meets the scene display's at the same height on your desk (monitors of different sizes and scaling rarely line up exactly from Plasma's arrangement alone).
+   - **Pauza / Pause**: pause when *this* display is covered, or when *any* display is.
+   - **Izvor / Source**: *Bundled copy* uses the files inside the plugin instead of the online page (offline, or to try a local build).
 
 ### Windows (Lively Wallpaper)
 
 Download [`releases/Live-Zagreb-Wallpaper-Windows-Setup.zip`](releases/Live-Zagreb-Wallpaper-Windows-Setup.zip), extract it, and double-click **`Setup-Live-Zagreb-Wallpaper.bat`**.
 - Automatically installs [Lively Wallpaper](https://rocksdanister.github.io/lively/) via `winget` if not already installed, starts Lively, and imports `skill-issue-wallpaper-lively.zip`.
 - Right-click the wallpaper in Lively → **Customise** to configure city, language, and sharp mode.
+- **Multiple displays**: for *Clone* use Lively's *Per display* or *Duplicate* wallpaper layout. For *Span*, set Lively's layout to *Span* and the wallpaper's *Layout* to *Span*. The page asks the browser for the real display layout (Window Management API) and puts the scene on the primary display, or on *Scene display* if set; if that is not available it splits the width into *Displays side by side* equal parts.
+- **Pause** is Lively's own setting (per display or all displays). With Lively's *Span* layout the wallpaper is a single window, so it pauses as a whole.
 
 ---
 
-## Automated Verification
+## Testing
 
-To run the full validation suite (QML lint, JSON/ZIP manifest checks, live Open-Meteo DOM check, Chromium stderr/CSP audit, and 11-scenario render matrix):
-
-```bash
-node studio/wallpaper/verify.mjs
-```
-
-Screenshots are saved into `.gemini/antigravity/brain/.../screenshots/`.
+The page takes test overrides in the URL hash: `clock=<ISO time>`, `wx=<WMO weather code>`, `season=spring|summer|autumn|winter`, plus the span geometry `layout=span&view=x,y,w,h&desk=w,h&scene=x,y,w,h` (what KDE sends) or `layout=span&slots=3&slot=2` (Lively's equal-display fallback). Serve `web/` locally, for example `python3 -m http.server -d web 8765`, and open `http://localhost:8765/#clock=2026-11-13T16:40:00%2B01:00&wx=61`.

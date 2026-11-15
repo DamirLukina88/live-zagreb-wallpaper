@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtWebEngine
 import org.kde.plasma.plasmoid
 import org.kde.taskmanager as TaskManager
@@ -6,19 +7,76 @@ import org.kde.taskmanager as TaskManager
 WallpaperItem {
     id: root
 
+    readonly property string onlineUrl: "https://damirlukina88.github.io/live-zagreb-wallpaper/"
+    readonly property string bundledUrl: Qt.resolvedUrl("../web/index.html")
+
+    // ------------------------------------------------------------------
+    // Multi-display geometry. Plasma runs one wallpaper per display; in span mode each page is told
+    // where its display sits on the desktop and which display carries the scene.
+    // ------------------------------------------------------------------
+    function rectStr(r) {
+        return Math.round(r.x) + "," + Math.round(r.y) + "," + Math.round(r.w) + "," + Math.round(r.h);
+    }
+
+    readonly property var layoutInfo: {
+        var screens = Qt.application.screens;
+        // Height alignment (per display): + moves this display's part of the picture up
+        var nudge = Number(root.configuration.HeightOffset) || 0;
+        var mine = { x: Screen.virtualX, y: Screen.virtualY + nudge, w: Screen.width, h: Screen.height };
+        if ((root.configuration.Layout || "clone") !== "span" || screens.length === 0) {
+            return { layout: "clone" };
+        }
+        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        var want = root.configuration.SceneDisplay || "";
+        var scene = null, largest = null;
+        for (var i = 0; i < screens.length; ++i) {
+            var s = screens[i];
+            var r = { x: s.virtualX, y: s.virtualY, w: s.width, h: s.height };
+            minX = Math.min(minX, r.x); minY = Math.min(minY, r.y);
+            maxX = Math.max(maxX, r.x + r.w); maxY = Math.max(maxY, r.y + r.h);
+            if (want !== "" && s.name === want) scene = r;
+            if (!largest || r.w * r.h > largest.w * largest.h || (r.w * r.h === largest.w * largest.h && r.x < largest.x)) largest = r;
+        }
+        if (!scene) scene = largest;
+        // The scene display is the reference: alignment only moves the displays beside it
+        if (scene.x === Screen.virtualX && scene.y === Screen.virtualY) mine.y = Screen.virtualY;
+        var shift = function (r) { return { x: r.x - minX, y: r.y - minY, w: r.w, h: r.h }; };
+        return {
+            layout: "span",
+            view: shift(mine),
+            desk: { w: maxX - minX, h: maxY - minY },
+            scene: shift(scene)
+        };
+    }
+
     function getConfigJson() {
-        return JSON.stringify({
+        var info = root.layoutInfo;
+        var cfg = {
             city: root.configuration.City || "Zagreb",
             lang: root.configuration.Language || "hr",
-            sharp: !!root.configuration.Sharp
-        });
+            sharp: !!root.configuration.Sharp,
+            layout: info.layout
+        };
+        if (info.layout === "span") {
+            cfg.view = info.view;
+            cfg.desk = info.desk;
+            cfg.scene = info.scene;
+        }
+        return JSON.stringify(cfg);
     }
 
     function getHash() {
         var c = root.configuration.City || "Zagreb";
         var l = root.configuration.Language || "hr";
         var s = root.configuration.Sharp ? "1" : "0";
-        return "city=" + encodeURIComponent(c) + "&lang=" + encodeURIComponent(l) + "&sharp=" + s;
+        var h = "city=" + encodeURIComponent(c) + "&lang=" + encodeURIComponent(l) + "&sharp=" + s;
+        var info = root.layoutInfo;
+        h += "&layout=" + info.layout;
+        if (info.layout === "span") {
+            h += "&view=" + rectStr(info.view) + "&desk=" + Math.round(info.desk.w) + "," + Math.round(info.desk.h)
+                + "&scene=" + rectStr(info.scene);
+        }
+        return h;
     }
 
     function pushSettings() {
@@ -27,24 +85,62 @@ WallpaperItem {
         }
     }
 
-    TaskManager.TasksModel {
-        id: tasks
-        filterByScreen: true
-        filterByCurrentVirtualDesktop: true
-        filterNotMinimized: true
+    function pushPaused() {
+        if (web && web.loading === false) {
+            web.runJavaScript("if (window.wallpaperPaused) window.wallpaperPaused(" + (root.isCovered ? "true" : "false") + ");");
+        }
     }
 
-    readonly property bool isCovered: {
+    onLayoutInfoChanged: pushSettings()
+
+    // ------------------------------------------------------------------
+    // Pause while fullscreen or maximized windows cover this display (or any display, by setting)
+    // ------------------------------------------------------------------
+    TaskManager.VirtualDesktopInfo { id: desktopInfo }
+    TaskManager.ActivityInfo { id: activityInfo }
+
+    TaskManager.TasksModel {
+        id: tasks
+        groupMode: TaskManager.TasksModel.GroupDisabled
+        screenGeometry: Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
+        filterByScreen: (root.configuration.PauseRule || "screen") !== "all"
+        virtualDesktop: desktopInfo.currentDesktop
+        filterByVirtualDesktop: true
+        activity: activityInfo.currentActivity
+        filterByActivity: true
+        filterNotMinimized: true
+
+        // Roles change in place when a window is maximized or goes fullscreen, so watch the
+        // model's signals rather than only its count
+        onDataChanged: coverCheck.restart()
+        onRowsInserted: coverCheck.restart()
+        onRowsRemoved: coverCheck.restart()
+        onModelReset: coverCheck.restart()
+        onCountChanged: coverCheck.restart()
+    }
+
+    property bool isCovered: false
+
+    function computeCovered() {
         for (var i = 0; i < tasks.count; ++i) {
             var idx = tasks.index(i, 0);
-            var isFull = tasks.data(idx, TaskManager.AbstractTasksModel.IsFullScreen);
-            var isMax = tasks.data(idx, TaskManager.AbstractTasksModel.IsMaximized);
-            if (isFull || isMax) {
+            if (!tasks.data(idx, TaskManager.AbstractTasksModel.IsWindow)) continue;
+            if (tasks.data(idx, TaskManager.AbstractTasksModel.IsFullScreen)
+                || tasks.data(idx, TaskManager.AbstractTasksModel.IsMaximized)) {
                 return true;
             }
         }
         return false;
     }
+
+    Timer {
+        id: coverCheck
+        interval: 150
+        onTriggered: root.isCovered = root.computeCovered()
+    }
+
+    onIsCoveredChanged: pushPaused()
+    Component.onCompleted: coverCheck.restart()
 
     WebEngineView {
         id: web
@@ -57,18 +153,18 @@ WallpaperItem {
         settings.javascriptEnabled: true
         settings.playbackRequiresUserGesture: true
 
-        lifecycleState: root.isCovered ? WebEngineView.LifecycleState.Frozen : WebEngineView.LifecycleState.Active
-
         Component.onCompleted: {
-            url = "https://damirlukina88.github.io/live-zagreb-wallpaper/#" + root.getHash();
+            fellBackToLocal = !!root.configuration.Bundled;
+            url = (fellBackToLocal ? root.bundledUrl : root.onlineUrl) + "#" + root.getHash();
         }
 
         onLoadingChanged: function(loadRequest) {
             if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
                 root.pushSettings();
+                root.pushPaused();
             } else if (loadRequest.status === WebEngineView.LoadFailedStatus && !fellBackToLocal) {
                 fellBackToLocal = true;
-                url = Qt.resolvedUrl("../web/index.html") + "#" + root.getHash();
+                url = root.bundledUrl + "#" + root.getHash();
             }
         }
 
@@ -79,8 +175,14 @@ WallpaperItem {
 
     Connections {
         target: root.configuration
-        function onValueChanged() {
+        function onValueChanged(key, value) {
+            if (key === "Bundled") {
+                web.fellBackToLocal = !!value;
+                web.url = (value ? root.bundledUrl : root.onlineUrl) + "#" + root.getHash();
+                return;
+            }
             root.pushSettings();
+            coverCheck.restart();
         }
     }
 }

@@ -1,0 +1,46 @@
+{
+  "city": {
+    "type": "textbox",
+    "text": "Grad / City",
+    "value": "Zagreb",
+    "help": "City name for live weather and astronomical clock"
+  },
+  "lang": {
+    "type": "dropdown",
+    "text": "Jezik / Language",
+    "value": 0,
+    "items": ["Hrvatski", "English"],
+    "help": "Language for the weather panel and countdowns"
+  },
+  "sharp": {
+    "type": "checkbox",
+    "text": "Sharp (Puna rezolucija)",
+    "value": false,
+    "help": "Enable full-resolution rendering (uses slightly more GPU/battery)"
+  },
+  "layout": {
+    "type": "dropdown",
+    "text": "Raspored / Layout",
+    "value": 0,
+    "items": ["Kopija / Clone", "Preko svih zaslona / Span"],
+    "help": "Span: one scene over all displays. Use it with Lively's own 'Span' wallpaper layout."
+  },
+  "spanDisplays": {
+    "type": "slider",
+    "text": "Broj zaslona / Displays side by side",
+    "value": 3,
+    "min": 2,
+    "max": 6,
+    "step": 1,
+    "help": "Span: used only if Lively cannot report the displays' real layout: how many equal-width displays the wallpaper is spread over"
+  },
+  "sceneDisplay": {
+    "type": "slider",
+    "text": "Zaslon sa scenom / Scene display",
+    "value": 0,
+    "min": 0,
+    "max": 6,
+    "step": 1,
+    "help": "Span: which display (counted from the left) shows the terrace and the weather card. 0 = automatic (the primary display)"
+  }
+}

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls as QQC2
+import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
 Kirigami.FormLayout {
@@ -8,6 +9,11 @@ Kirigami.FormLayout {
     property alias cfg_City: cityField.text
     property string cfg_Language
     property alias cfg_Sharp: sharpCheck.checked
+    property string cfg_Layout
+    property string cfg_SceneDisplay
+    property string cfg_PauseRule
+    property alias cfg_HeightOffset: offsetSpin.value
+    property alias cfg_Bundled: bundledCheck.checked
 
     QQC2.TextField {
         id: cityField
@@ -32,5 +38,88 @@ Kirigami.FormLayout {
         id: sharpCheck
         Kirigami.FormData.label: "Kvaliteta / Quality:"
         text: "Oštra slika (Sharp full-res, više CPU/baterije)"
+    }
+
+    Kirigami.Separator {
+        Kirigami.FormData.isSection: true
+        Kirigami.FormData.label: "Više zaslona / Multiple displays"
+    }
+
+    QQC2.ComboBox {
+        id: layoutCombo
+        Kirigami.FormData.label: "Raspored / Layout:"
+        textRole: "text"
+        valueRole: "value"
+        model: [
+            { text: "Kopija na svakom zaslonu / Clone on each display", value: "clone" },
+            { text: "Jedna scena preko svih / Span over all displays", value: "span" }
+        ]
+        currentIndex: root.cfg_Layout === "span" ? 1 : 0
+        onActivated: root.cfg_Layout = currentValue
+    }
+
+    QQC2.ComboBox {
+        id: sceneCombo
+        Kirigami.FormData.label: "Zaslon sa scenom / Scene display:"
+        enabled: root.cfg_Layout === "span"
+        textRole: "text"
+        valueRole: "value"
+        model: {
+            var m = [{ text: "Automatski (najveći) / Automatic (largest)", value: "" }];
+            var s = Qt.application.screens;
+            for (var i = 0; i < s.length; ++i) {
+                m.push({ text: s[i].name + " (" + s[i].width + "×" + s[i].height + ")", value: s[i].name });
+            }
+            return m;
+        }
+        currentIndex: Math.max(0, indexOfValue(root.cfg_SceneDisplay))
+        onActivated: root.cfg_SceneDisplay = currentValue
+    }
+
+    QQC2.SpinBox {
+        id: offsetSpin
+        Kirigami.FormData.label: "Poravnanje visine / Height alignment:"
+        enabled: root.cfg_Layout === "span"
+        from: -800
+        to: 800
+        stepSize: 5
+        editable: true
+        textFromValue: function (v) { return (v > 0 ? "+" : "") + v + " px"; }
+        valueFromText: function (t) { return parseInt(t, 10) || 0; }
+    }
+
+    QQC2.Label {
+        visible: root.cfg_Layout === "span"
+        Layout.maximumWidth: Kirigami.Units.gridUnit * 24
+        wrapMode: Text.WordWrap
+        font: Kirigami.Theme.smallFont
+        text: "Za bočne zaslone: ako ograda ne pada u istu visinu kao na zaslonu sa scenom, pomakni sliku (+ gore, − dolje). / For the side displays: if the railing doesn't meet the scene display's at the same height on your desk, shift this display's picture (+ up, − down)."
+    }
+
+    QQC2.Label {
+        visible: root.cfg_Layout === "span"
+        Layout.maximumWidth: Kirigami.Units.gridUnit * 24
+        wrapMode: Text.WordWrap
+        font: Kirigami.Theme.smallFont
+        text: "Postavi istu tapetu i raspored na svakom zaslonu. / Set this wallpaper and layout on every display."
+    }
+
+    QQC2.ComboBox {
+        id: pauseCombo
+        Kirigami.FormData.label: "Pauza / Pause:"
+        textRole: "text"
+        valueRole: "value"
+        model: [
+            { text: "Kad je ovaj zaslon prekriven / When this display is covered", value: "screen" },
+            { text: "Kad je bilo koji zaslon prekriven / When any display is covered", value: "all" }
+        ]
+        currentIndex: root.cfg_PauseRule === "all" ? 1 : 0
+        onActivated: root.cfg_PauseRule = currentValue
+    }
+
+    QQC2.CheckBox {
+        id: bundledCheck
+        Kirigami.FormData.label: "Izvor / Source:"
+        text: "Lokalna kopija (bez mreže) / Bundled copy (offline)"
     }
 }
