@@ -3,6 +3,10 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ZipPath = Join-Path $ScriptDir "skill-issue-wallpaper-lively.zip"
+# From a git clone the package is built into dist\ (npm run build)
+if (-not (Test-Path $ZipPath)) {
+    $ZipPath = Join-Path (Split-Path -Parent $ScriptDir) "dist\skill-issue-wallpaper-lively.zip"
+}
 
 if (-not (Test-Path $ZipPath)) {
     Write-Host "ERROR: Missing $ZipPath" -ForegroundColor Red
@@ -58,4 +62,6 @@ Start-Process -FilePath $LivelyExe -ArgumentList "setwp --file `"$ZipPath`""
 
 Write-Host ""
 Write-Host "Done! If Lively asks to confirm importing the wallpaper, click OK." -ForegroundColor Green
+Write-Host "Updating from an older version: the new package is imported as a new entry." -ForegroundColor Yellow
+Write-Host "In Lively's library, right-click the old 'Skill Issue: Zagreb Weather' entry and delete it." -ForegroundColor Yellow
 Write-Host "To change City, Language, or Sharp mode: right-click the wallpaper in Lively -> Customise." -ForegroundColor Gray

@@ -1,6 +1,14 @@
 // src/wallpaper/weather-api.js — Open-Meteo geocoding and forecast, with a localStorage cache.
 
 const GEO_TTL = 7 * 24 * 3600 * 1000;
+const TIMEOUT_MS = 15000;
+
+// A request that hangs (captive portal, sleeping network) must fail so the retry timer can run
+function fetchJson(url) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+    return fetch(url, { signal: ctl.signal }).finally(() => clearTimeout(timer));
+}
 
 async function geocode(city) {
     const name = (city || 'Zagreb').trim().substring(0, 50).replace(/[^\p{L}\p{N}\s\-]/gu, '').trim() || 'Zagreb';
@@ -13,7 +21,7 @@ async function geocode(city) {
         }
     } catch {}
     const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name.toLowerCase())}&count=1&format=json`;
-    const res = await fetch(url);
+    const res = await fetchJson(url);
     if (!res.ok) throw new Error(`Geocoding failed: HTTP ${res.status}`);
     const json = await res.json();
     if (json.results && json.results.length > 0) {
@@ -33,7 +41,7 @@ async function geocode(city) {
 export async function fetchWeather(city = 'Zagreb') {
     const geo = await geocode(city);
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current_weather=true&hourly=precipitation&daily=weathercode,temperature_2m_max,temperature_2m_min,sunrise,sunset&timezone=auto`;
-    const res = await fetch(url);
+    const res = await fetchJson(url);
     if (!res.ok) throw new Error(`Forecast failed: HTTP ${res.status}`);
     const json = await res.json();
     const cur = json.current_weather || {};

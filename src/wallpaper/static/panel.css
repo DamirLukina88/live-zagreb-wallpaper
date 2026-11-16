@@ -258,3 +258,16 @@ html, body {
     color: #b2b2b3;
     font-size: 0.85em;
 }
+
+/* "Plugin update available": the installed KDE plugin or Lively package is older than the page */
+.wp-update {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 196, 0, 0.45);
+    border-radius: 6px;
+    color: #ffc400;
+    font-size: 7px;
+    line-height: 1.6;
+    text-align: center;
+}
+.wp-update[hidden] { display: none; }

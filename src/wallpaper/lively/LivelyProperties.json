@@ -9,14 +9,27 @@
     "type": "dropdown",
     "text": "Jezik / Language",
     "value": 0,
-    "items": ["Hrvatski", "English"],
+    "items": [
+      "Hrvatski",
+      "English"
+    ],
     "help": "Language for the weather panel and countdowns"
   },
-  "sharp": {
+  "quality": {
+    "type": "dropdown",
+    "text": "Kvaliteta / Quality",
+    "value": 0,
+    "items": [
+      "Automatski / Automatic",
+      "Uvijek niska / Always low"
+    ],
+    "help": "Automatic: the still picture is sharp, animated rain and snow are half resolution. Always low: half resolution all the time (least memory)"
+  },
+  "animBattery": {
     "type": "checkbox",
-    "text": "Sharp (Puna rezolucija)",
+    "text": "Animiraj i na bateriji / Animate on battery too",
     "value": false,
-    "help": "Enable full-resolution rendering (uses slightly more GPU/battery)"
+    "help": "Off: on battery power the picture is always still, also in rain and snow"
   },
   "fps": {
     "type": "slider",
@@ -25,13 +38,16 @@
     "min": 5,
     "max": 30,
     "step": 1,
-    "help": "Used only while rain, snow, hail or a storm moves; otherwise the picture stays still (redrawn once a minute) to save GPU and battery"
+    "help": "Used only while rain, snow, hail or a storm moves, and only on mains power; otherwise the picture stays still (redrawn once a minute) to save GPU and battery"
   },
   "layout": {
     "type": "dropdown",
     "text": "Raspored / Layout",
     "value": 0,
-    "items": ["Kopija / Clone", "Preko svih zaslona / Span"],
+    "items": [
+      "Kopija / Clone",
+      "Preko svih zaslona / Span"
+    ],
     "help": "Span: one scene over all displays. Use it with Lively's own 'Span' wallpaper layout."
   },
   "spanDisplays": {

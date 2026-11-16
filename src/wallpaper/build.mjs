@@ -2,12 +2,12 @@
 //
 //   node src/wallpaper/build.mjs
 //
-// Writes:
+// Writes (none of it is committed; GitHub Actions builds, deploys web/ and attaches dist/ to a release):
 //   web/                      app.js, index.html, panel.css, sw.js (deployed to GitHub Pages; bg/ and
 //                             fonts/ in web/ are source assets and are left alone)
 //   kde/skill-issue-wallpaper/contents/web/   copy of web/ (offline fallback for Plasma)
-//   windows/skill-issue-wallpaper-lively.zip  Lively package
-//   releases/                 Linux and Windows setup archives
+//   dist/skill-issue-wallpaper-lively.zip             Lively package
+//   dist/Live-Zagreb-Wallpaper-{Linux,Windows}-Setup  setup archives
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -21,8 +21,9 @@ const ROOT = path.resolve(HERE, '../..');
 const WEB = path.join(ROOT, 'web');
 const KDE = path.join(ROOT, 'kde/skill-issue-wallpaper');
 const KDE_WEB = path.join(KDE, 'contents/web');
-const LIVELY_ZIP = path.join(ROOT, 'windows/skill-issue-wallpaper-lively.zip');
-const RELEASES = path.join(ROOT, 'releases');
+const DIST = path.join(ROOT, 'dist');
+const LIVELY_ZIP = path.join(DIST, 'skill-issue-wallpaper-lively.zip');
+const RELEASES = DIST;
 const ASSET_DIRS = ['bg', 'fonts'];
 
 const rel = p => path.relative(ROOT, p);
@@ -70,7 +71,22 @@ function tarDir(dir, out) {
         { env: { ...process.env, GZIP: '-n' } });
 }
 
+// One version everywhere: package.json is the source, the host packages must say the same
+function checkVersions() {
+    const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+    const meta = JSON.parse(fs.readFileSync(path.join(KDE, 'metadata.json'), 'utf8')).KPlugin.Version;
+    const qml = fs.readFileSync(path.join(KDE, 'contents/ui/main.qml'), 'utf8');
+    const lively = JSON.parse(fs.readFileSync(path.join(HERE, 'lively/LivelyInfo.json'), 'utf8')).FileName;
+    const bad = [];
+    if (meta !== version) bad.push(`kde metadata.json Version is ${meta}`);
+    if (!qml.includes(`hostVersion: "${version}"`)) bad.push('kde main.qml hostVersion differs');
+    if (!lively.endsWith(`#host=lively-${version}`)) bad.push('LivelyInfo.json FileName #host= differs');
+    if (bad.length) throw new Error(`Version mismatch with package.json ${version}: ${bad.join('; ')}`);
+}
+
 async function main() {
+    checkVersions();
+    fs.mkdirSync(DIST, { recursive: true });
     // 1. app.js
     await build({
         entryPoints: [path.join(HERE, 'main.js')],
@@ -126,9 +142,10 @@ async function main() {
 
         const win = path.join(tmp, 'win');
         fs.mkdirSync(win);
-        for (const f of ['install.ps1', 'Setup-Live-Zagreb-Wallpaper.bat', 'skill-issue-wallpaper-lively.zip']) {
+        for (const f of ['install.ps1', 'Setup-Live-Zagreb-Wallpaper.bat']) {
             fs.copyFileSync(path.join(ROOT, 'windows', f), path.join(win, f));
         }
+        fs.copyFileSync(LIVELY_ZIP, path.join(win, 'skill-issue-wallpaper-lively.zip'));
         zipDir(win, path.join(RELEASES, 'Live-Zagreb-Wallpaper-Windows-Setup.zip'));
     } finally {
         fs.rmSync(tmp, { recursive: true, force: true });

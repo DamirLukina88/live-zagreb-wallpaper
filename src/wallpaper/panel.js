@@ -44,6 +44,24 @@ export function tr(key, lang = 'hr') {
 }
 
 const $ = id => document.getElementById(id);
+function span(cls, text) {
+    const el = document.createElement('span');
+    el.className = cls;
+    el.textContent = text;
+    return el;
+}
+
+// One line under the forecast when the installed plugin/package is older than this page needs
+const UPDATE_TEXT = {
+    hr: 'Nova verzija dodatka: ponovno pokreni instalaciju',
+    en: 'Plugin update available: run the installer again'
+};
+export function renderUpdateNotice(show, lang = 'hr') {
+    const el = $('wp-update');
+    if (!el) return;
+    el.hidden = !show;
+    el.textContent = show ? (UPDATE_TEXT[lang] || UPDATE_TEXT.hr) : '';
+}
 
 export function renderPanel(w, lang = 'hr') {
     const panel = $('weather-panel');
@@ -91,14 +109,9 @@ export function renderPanel(w, lang = 'hr') {
             const min = lo[i] !== undefined ? lo[i] : base - 2;
             const li = document.createElement('li');
             li.className = 'wm-forecast-item';
-            li.innerHTML = `
-                <span class="wm-forecast-day">${label}</span>
-                <span class="wm-forecast-icon">${icon(code, true)}</span>
-                <span class="wm-forecast-temps">
-                    <span class="wm-forecast-hi">${formatTemp(max, lang)}</span>
-                    <span class="wm-forecast-lo">${formatTemp(min, lang)}</span>
-                </span>
-            `;
+            const temps = span('wm-forecast-temps', '');
+            temps.append(span('wm-forecast-hi', formatTemp(max, lang)), span('wm-forecast-lo', formatTemp(min, lang)));
+            li.append(span('wm-forecast-day', label), span('wm-forecast-icon', icon(code, true)), temps);
             list.appendChild(li);
         }
     }

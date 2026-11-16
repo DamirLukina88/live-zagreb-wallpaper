@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skill Issue: Zagreb Weather Wallpaper</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; connect-src https://api.open-meteo.com https://geocoding-api.open-meteo.com; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; connect-src https://api.open-meteo.com https://geocoding-api.open-meteo.com; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';">
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="panel.css">
 </head>
 <body>
@@ -30,6 +31,7 @@
             <span><span class="wm-sun-icon">🌇</span> <span id="wp-sunset-label">ZALAZAK</span> <b id="wp-sunset">--:--</b></span>
         </div>
         <ul class="wm-forecast-list" id="wp-forecast-list"></ul>
+        <div class="wp-update" id="wp-update" hidden></div>
     </div>
 
     <script src="app.js"></script>

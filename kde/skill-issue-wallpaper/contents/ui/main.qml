@@ -7,6 +7,10 @@ import org.kde.taskmanager as TaskManager
 WallpaperItem {
     id: root
 
+    // This plugin's version (the same as metadata.json; the build checks it). The page compares it
+    // with the version it needs and shows "plugin update available" on the weather card if it is older.
+    readonly property string hostVersion: "1.2.0"
+    readonly property string quality: root.configuration.Quality === "low" ? "low" : "auto"
     readonly property int fps: Math.max(5, Math.min(30, Number(root.configuration.FrameRate) || 15))
     readonly property string onlineUrl: "https://damirlukina88.github.io/live-zagreb-wallpaper/"
     readonly property string bundledUrl: Qt.resolvedUrl("../web/index.html")
@@ -56,7 +60,8 @@ WallpaperItem {
         var cfg = {
             city: root.configuration.City || "Zagreb",
             lang: root.configuration.Language || "hr",
-            sharp: !!root.configuration.Sharp,
+            quality: root.quality,
+            animBattery: !!root.configuration.AnimateOnBattery,
             fps: root.fps,
             layout: info.layout
         };
@@ -71,8 +76,8 @@ WallpaperItem {
     function getHash() {
         var c = root.configuration.City || "Zagreb";
         var l = root.configuration.Language || "hr";
-        var s = root.configuration.Sharp ? "1" : "0";
-        var h = "city=" + encodeURIComponent(c) + "&lang=" + encodeURIComponent(l) + "&sharp=" + s + "&fps=" + root.fps;
+        var h = "city=" + encodeURIComponent(c) + "&lang=" + encodeURIComponent(l) + "&quality=" + root.quality
+            + "&animbattery=" + (root.configuration.AnimateOnBattery ? "1" : "0") + "&fps=" + root.fps + "&host=kde-" + root.hostVersion;
         var info = root.layoutInfo;
         h += "&layout=" + info.layout;
         if (info.layout === "span") {
@@ -95,6 +100,41 @@ WallpaperItem {
     }
 
     onLayoutInfoChanged: pushSettings()
+
+    // ------------------------------------------------------------------
+    // Mains or battery: on battery the page does not animate (unless the user allows it)
+    // ------------------------------------------------------------------
+    // The data source lives in an optional module, so it is created at run time: without it the
+    // page falls back to the browser's own battery information, or assumes mains power.
+    property var powerSource: null
+    property bool onBattery: false
+
+    function pushPower() {
+        if (root.powerSource && web && web.loading === false) {
+            web.runJavaScript("if (window.wallpaperPower) window.wallpaperPower(" + (root.onBattery ? "true" : "false") + ");");
+        }
+    }
+
+    function readPower() {
+        var d = root.powerSource && root.powerSource.data ? root.powerSource.data["AC Adapter"] : null;
+        if (d && d["Plugged in"] !== undefined) root.onBattery = !d["Plugged in"];
+    }
+
+    onOnBatteryChanged: pushPower()
+
+    Component.onCompleted: {
+        coverCheck.restart();
+        try {
+            root.powerSource = Qt.createQmlObject(
+                'import org.kde.plasma.plasma5support as P5Support\n'
+                + 'P5Support.DataSource { engine: "powermanagement"; connectedSources: ["AC Adapter"] }',
+                root, "powerSource");
+            root.powerSource.dataChanged.connect(root.readPower);
+            root.readPower();
+        } catch (e) {
+            console.warn("Skill Issue wallpaper: no power information, assuming mains:", e);
+        }
+    }
 
     // ------------------------------------------------------------------
     // Pause while fullscreen or maximized windows cover this display (or any display, by setting)
@@ -143,7 +183,6 @@ WallpaperItem {
     }
 
     onIsCoveredChanged: pushPaused()
-    Component.onCompleted: coverCheck.restart()
 
     WebEngineView {
         id: web
@@ -165,6 +204,7 @@ WallpaperItem {
             if (loadRequest.status === WebEngineView.LoadSucceededStatus) {
                 root.pushSettings();
                 root.pushPaused();
+                root.pushPower();
             } else if (loadRequest.status === WebEngineView.LoadFailedStatus && !fellBackToLocal) {
                 fellBackToLocal = true;
                 url = root.bundledUrl + "#" + root.getHash();

@@ -8,7 +8,8 @@ Kirigami.FormLayout {
 
     property alias cfg_City: cityField.text
     property string cfg_Language
-    property alias cfg_Sharp: sharpCheck.checked
+    property string cfg_Quality
+    property alias cfg_AnimateOnBattery: batteryCheck.checked
     property string cfg_Layout
     property string cfg_SceneDisplay
     property string cfg_PauseRule
@@ -35,10 +36,23 @@ Kirigami.FormLayout {
         onActivated: root.cfg_Language = currentValue
     }
 
-    QQC2.CheckBox {
-        id: sharpCheck
+    QQC2.ComboBox {
+        id: qualityCombo
         Kirigami.FormData.label: "Kvaliteta / Quality:"
-        text: "Oštra slika (Sharp full-res, više CPU/baterije)"
+        textRole: "text"
+        valueRole: "value"
+        model: [
+            { text: "Automatski: oštra mirna slika / Automatic: sharp still picture", value: "auto" },
+            { text: "Uvijek niska (najmanje memorije) / Always low (least memory)", value: "low" }
+        ]
+        currentIndex: root.cfg_Quality === "low" ? 1 : 0
+        onActivated: root.cfg_Quality = currentValue
+    }
+
+    QQC2.CheckBox {
+        id: batteryCheck
+        Kirigami.FormData.label: "Na bateriji / On battery:"
+        text: "Animiraj kišu i snijeg i na bateriji / Animate rain and snow on battery too"
     }
 
     QQC2.SpinBox {
@@ -56,7 +70,7 @@ Kirigami.FormLayout {
         Layout.maximumWidth: Kirigami.Units.gridUnit * 24
         wrapMode: Text.WordWrap
         font: Kirigami.Theme.smallFont
-        text: "Bez padalina slika miruje i osvježava se jednom u minuti (sunce, nebo, svjetla) radi grafike i baterije. Ovo vrijedi samo dok pada kiša, snijeg, tuča ili grmi. / Without precipitation the picture stays still and is redrawn once a minute (sun, sky, lights) to save GPU and battery. This applies only while rain, snow, hail or a storm is falling."
+        text: "Bez padalina slika miruje i osvježava se jednom u minuti (sunce, nebo, svjetla) radi grafike i baterije. Ovo vrijedi samo dok pada kiša, snijeg, tuča ili grmi, a na bateriji slika uvijek miruje. / Without precipitation, and always on battery, the picture stays still and is redrawn once a minute (sun, sky, lights) to save GPU and battery. This applies only while rain, snow, hail or a storm is falling."
     }
 
     Kirigami.Separator {

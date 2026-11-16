@@ -14,8 +14,12 @@
       <label>Language code / Jezik (hr or en)</label>
       <default>hr</default>
     </entry>
-    <entry name="Sharp" type="Bool">
-      <label>Sharp full-resolution mode / Oštra puna rezolucija</label>
+    <entry name="Quality" type="String">
+      <label>Picture quality: auto (a still picture is sharp, animated rain and snow are half resolution) or low (always half resolution)</label>
+      <default>auto</default>
+    </entry>
+    <entry name="AnimateOnBattery" type="Bool">
+      <label>Animate rain, snow and storms on battery power too (off: on battery the picture is always still)</label>
       <default>false</default>
     </entry>
     <entry name="Layout" type="String">
@@ -31,7 +35,7 @@
       <default>0</default>
     </entry>
     <entry name="FrameRate" type="Int">
-      <label>Frames per second while rain, snow, hail or a storm moves (5-30). Otherwise the picture stays still (redrawn once a minute for the sun and sky) to save GPU and battery</label>
+      <label>Frames per second while rain, snow, hail or a storm moves (5-30). Otherwise, and on battery power, the picture stays still (redrawn once a minute for the sun and sky) to save GPU and battery</label>
       <default>15</default>
       <min>5</min>
       <max>30</max>
