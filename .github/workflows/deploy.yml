@@ -1,7 +1,7 @@
 name: Build, check and deploy Live Zagreb Wallpaper
 
 # main  -> build, verify, benchmark subset, deploy web/ to GitHub Pages (every desktop updates itself)
-# v* tag -> the same, plus the Linux and Windows setup archives attached to a GitHub Release
+# v* tag -> build and checks again, then the Linux and Windows setup archives attached to a GitHub Release
 on:
   push:
     branches: ["main"]
@@ -47,7 +47,8 @@ jobs:
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    # Pages accepts deploys from main only; a tag's commit is already deployed by its push to main
+    if: github.ref == 'refs/heads/main'
     permissions:
       pages: write
       id-token: write
