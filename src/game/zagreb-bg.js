@@ -1155,7 +1155,8 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             const stamp = `${ww}x${wh}|${rect.x},${rect.y},${rect.w},${rect.h}`;
             const nowMs = performance.now();
             const cached = glassAt[slot];
-            const reuse = moving() && cached && cached.stamp === stamp && nowMs - cached.at < GLASS_REFRESH_MS;
+            // Wallpaper: this runs only when the cached background is rebuilt (once a minute)
+            const reuse = !wallpaper() && moving() && cached && cached.stamp === stamp && nowMs - cached.at < GLASS_REFRESH_MS;
             if (!reuse) {
             const work = glassCanvas('work', ww, wh);
             const wg = work.getContext('2d');
@@ -1420,7 +1421,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         },
 
         // Midground / Foreground: Zagreb Terrace & Cathedral Cutout
-        scene(f) {
+        // part: 'all' (default), 'base' (the lit painting only, for the cached background) or
+        // 'live' (night lights and rain ripples, drawn every frame over that background)
+        scene(f, part = 'all') {
             const { ctx, W, H, wx, t } = f;
 
             // In a span, a display that does not show any of the scene rectangle skips it entirely
@@ -1432,7 +1435,8 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 const { drawX, drawY, drawW, drawH } = geom;
 
                 // 1. The cutout, already lit for this hour and weather
-                ctx.drawImage(sceneLayer(L), geom.ox, geom.oy);
+                if (part !== 'live') ctx.drawImage(sceneLayer(L), geom.ox, geom.oy);
+                if (part === 'base') return;
 
                 ctx.save();
 
@@ -1645,12 +1649,131 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         sx.setTransform(q, 0, 0, q, -WORLD.OX * q, -WORLD.OY * q);
         const fs = { ...fw, ctx: sx };
         for (const c of S.clouds) zagrebStyle.cloud(fs, c);
-        ctx.save();
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.imageSmoothingEnabled = true;
-        if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(sheetCanvas, 0, 0, w, h, 0, 0, w / q, h / q);
-        ctx.restore();
+        const dst = fw.ctx;
+        dst.save();
+        dst.setTransform(1, 0, 0, 1, 0, 0);
+        dst.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in dst) dst.imageSmoothingQuality = 'high';
+        dst.drawImage(sheetCanvas, 0, 0, w, h, 0, 0, w / q, h / q);
+        dst.restore();
+    }
+
+    // ------------------------------------------------------------------
+    // Wallpaper: the background is drawn once and kept until the minute, the sun or the weather
+    // changes; each frame then only adds what moves (lights, ripples, rain, snow, fog, lightning).
+    // ------------------------------------------------------------------
+    // The vignettes and veils are applied here in floating point, with a fixed dither, instead of
+    // as canvas gradients: over a dark sky a gradient covers only a few 8-bit levels and shows as
+    // rings. The colour look is baked in afterwards, so the page needs no CSS filter.
+    const BG = { key: '', work: null, out: null, dither: null };
+    function bgCanvas(name) {
+        let c = BG[name];
+        if (!c) c = BG[name] = document.createElement('canvas');
+        if (c.width !== S.W || c.height !== S.H) {
+            c.width = S.W;
+            c.height = S.H;
+        }
+        return c;
+    }
+    // Triangular noise of about +-1 level, fixed per pixel so a rebuilt picture does not shimmer
+    function ditherTable(n) {
+        if (BG.dither && BG.dither.length >= n) return BG.dither;
+        const d = new Float32Array(n);
+        let s = 0x9e3779b9;
+        const r = () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+        for (let i = 0; i < n; i++) d[i] = r() + r() - 1;
+        return (BG.dither = d);
+    }
+    // The same vignettes and veils as post() and frame() draw for the game, applied per pixel
+    function shadeAndDither(g, W, H) {
+        const img = g.getImageData(0, 0, W, H);
+        const px = img.data;
+        const dither = ditherTable(W * H);
+        const night = LIGHT && LIGHT.lum < 0.3;
+        const cx = W / 2, cy = H / 2, minWH = Math.min(W, H), diag = Math.hypot(W, H);
+        // post(): radial vignette to black at night, to a cool dark blue by day
+        const a0 = minWH * 0.32, b0 = diag * 0.56, A1 = night ? 0.38 : 0.22;
+        const C1 = night ? [0, 0, 0] : [10, 18, 30];
+        // frame(): the look's vignette to black
+        const a1 = minWH * 0.3, b1 = diag * 0.55, A2 = LOOK_VIGNETTE;
+        // post() veil 0.08 and the calm veil 0.1, both #16191f
+        const V = [0x16, 0x19, 0x1f];
+        // Per pixel the four layers reduce to v * m + add[c]; inside both inner radii they are constant
+        const mIn = 0.92 * 0.9;
+        const addIn = V.map(c => c * 0.08 * 0.9 + c * 0.1);
+        const a02 = a0 * a0, a12 = a1 * a1, inner2 = Math.min(a02, a12);
+        for (let y = 0, i = 0, k = 0; y < H; y++) {
+            const dy = y + 0.5 - cy, dy2 = dy * dy;
+            for (let x = 0; x < W; x++, i += 4, k++) {
+                const dx = x + 0.5 - cx, d2 = dx * dx + dy2;
+                const n = dither[k];
+                if (d2 <= inner2) {
+                    px[i] = px[i] * mIn + addIn[0] + n;
+                    px[i + 1] = px[i + 1] * mIn + addIn[1] + n;
+                    px[i + 2] = px[i + 2] * mIn + addIn[2] + n;
+                    continue;
+                }
+                const d = Math.sqrt(d2);
+                const t0 = d2 <= a02 ? 0 : d >= b0 ? 1 : (d - a0) / (b0 - a0);
+                const t1 = d2 <= a12 ? 0 : d >= b1 ? 1 : (d - a1) / (b1 - a1);
+                const al0 = A1 * t0, k1 = (1 - A2 * t1) * 0.9;
+                // post() vignette, post() veil 0.08, the look's vignette, the calm veil 0.1
+                const m = (1 - al0) * 0.92 * k1, w0 = t0 * al0 * 0.92 * k1;
+                px[i] = px[i] * m + C1[0] * w0 + V[0] * (0.08 * k1 + 0.1) + n; // Uint8ClampedArray rounds and clamps
+                px[i + 1] = px[i + 1] * m + C1[1] * w0 + V[1] * (0.08 * k1 + 0.1) + n;
+                px[i + 2] = px[i + 2] * m + C1[2] * w0 + V[2] * (0.08 * k1 + 0.1) + n;
+            }
+        }
+        g.putImageData(img, 0, 0);
+    }
+
+    // Build the background (sky, clouds, glass panes, the lit painting, vignettes, look) for now
+    function buildBackground(fw, L, minuteWall) {
+        const work = bgCanvas('work');
+        const g = work.getContext('2d');
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.globalAlpha = 1;
+        g.globalCompositeOperation = 'source-over';
+        g.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in g) g.imageSmoothingQuality = 'high';
+        g.clearRect(0, 0, S.W, S.H);
+        g.setTransform(1, 0, 0, 1, -WORLD.OX, -WORLD.OY);
+        const fb = { ...fw, ctx: g };
+        zagrebStyle.sky(fb);
+        placeClouds(fb, minuteWall, 0);
+        if (fb.wx.cloud >= 0.9 || fb.wx.fog > 0.4) drawSheets(fb);
+        else for (const c of S.clouds) zagrebStyle.cloud(fb, c);
+        drawExtension(fb);
+        zagrebStyle.scene(fb, 'base');
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        shadeAndDither(g, S.W, S.H);
+        const out = bgCanvas('out');
+        const o = out.getContext('2d');
+        o.setTransform(1, 0, 0, 1, 0, 0);
+        o.clearRect(0, 0, S.W, S.H);
+        o.filter = LOOK_CSS;
+        o.drawImage(work, 0, 0);
+        o.filter = 'none';
+        return out;
+    }
+
+    // Clouds drift with the wind. The wallpaper takes their places from the wall clock instead
+    // of the page's own running time: in a span every display runs its own page, and all of
+    // them must agree so a cloud crosses from one to the next.
+    function placeClouds(fw, wall, dt) {
+        const wx = fw.wx;
+        const T = zagrebStyle.tune;
+        const speed = c => (T.cloudBase + wx.wind * T.cloudWind) * c.d * (WORLD.RW / WORLD.DW);
+        const byClock = WORLD.span || wallpaper();
+        for (const c of S.clouds) {
+            if (byClock) {
+                c.x = (((c.x0 + 0.3 + wall * speed(c)) % 1.6) + 1.6) % 1.6 - 0.3;
+            } else {
+                c.x += dt * speed(c);
+                if (c.x > 1.3) c.x = -0.3;
+            }
+            c.px = c.x * fw.W;
+        }
     }
 
     function frame(dtReal, playing) {
@@ -1672,31 +1795,37 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         ctx.globalAlpha = 1;
         ctx.globalCompositeOperation = 'source-over';
 
-        zagrebStyle.sky(fw);
-
-        // Clouds drift with the wind. The wallpaper takes their places from the wall clock instead
-        // of the page's own running time: in a span every display runs its own page, and all of
-        // them must agree so a cloud crosses from one to the next. A still picture uses the clock
-        // to the whole minute, so displays redrawn a moment apart still show the same sky.
-        const T = zagrebStyle.tune;
-        const speed = c => (T.cloudBase + wx.wind * T.cloudWind) * c.d * (WORLD.RW / WORLD.DW);
-        const byClock = WORLD.span || wallpaper();
-        let wall = byClock ? (performance.timeOrigin + performance.now()) / 1000 : 0;
-        if (still()) wall = Math.floor(wall / 60) * 60;
-        for (const c of S.clouds) {
-            if (byClock) {
-                c.x = (((c.x0 + 0.3 + wall * speed(c)) % 1.6) + 1.6) % 1.6 - 0.3;
-            } else {
-                c.x += dt * speed(c);
-                if (c.x > 1.3) c.x = -0.3;
+        // Wallpaper: the background is cached (buildBackground) and redrawn only when the minute,
+        // the light, the weather or the size changes; the game draws everything every frame.
+        const cached = wallpaper() && !playing;
+        if (cached) {
+            // The clock to the whole minute, so displays redrawn a moment apart show the same sky
+            const wall = Math.floor((performance.timeOrigin + performance.now()) / 60000) * 60;
+            const L = computeLight(fw);
+            const key = [L.key, wall, S.W, S.H, sceneryHidden, imgLoaded, L.art.naturalWidth > 0].join('|');
+            if (BG.key !== key || !BG.out) {
+                const b0 = stats ? performance.now() : 0;
+                buildBackground(fw, L, wall);
+                BG.key = key;
+                if (stats) {
+                    stats.builds = (stats.builds || 0) + 1;
+                    stats.buildMs = performance.now() - b0;
+                }
             }
-            c.px = c.x * fw.W;
+            if (canvas.style.filter) canvas.style.filter = '';
+            toCanvas();
+            ctx.drawImage(BG.out, 0, 0);
+            toWorld();
+            zagrebStyle.scene(fw, 'live');
+        } else {
+            if (canvas.style.filter !== LOOK_CSS) canvas.style.filter = LOOK_CSS;
+            zagrebStyle.sky(fw);
+            placeClouds(fw, WORLD.span ? (performance.timeOrigin + performance.now()) / 1000 : 0, dt);
+            if (wx.cloud >= 0.9 || wx.fog > 0.4) drawSheets(fw);
+            else for (const c of S.clouds) zagrebStyle.cloud(fw, c);
+            drawExtension(fw);
+            zagrebStyle.scene(fw);
         }
-        if (wx.cloud >= 0.9 || wx.fog > 0.4) drawSheets(fw);
-        else for (const c of S.clouds) zagrebStyle.cloud(fw, c);
-
-        drawExtension(fw);
-        zagrebStyle.scene(fw);
 
         // Rain, snow and hail, in front of the scene
         toCanvas();
@@ -1767,18 +1896,21 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         }
         toCanvas();
 
-        zagrebStyle.post(f);
+        // The vignettes and veils (already in the cached background in wallpaper mode)
+        if (!cached) {
+            zagrebStyle.post(f);
 
-        // Vibrant look vignette
-        const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.hypot(W, H) * 0.55);
-        vg.addColorStop(0, 'rgba(0,0,0,0)');
-        vg.addColorStop(1, `rgba(0,0,0,${LOOK_VIGNETTE})`);
-        ctx.fillStyle = vg;
-        ctx.fillRect(0, 0, W, H);
+            // Vibrant look vignette
+            const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.hypot(W, H) * 0.55);
+            vg.addColorStop(0, 'rgba(0,0,0,0)');
+            vg.addColorStop(1, `rgba(0,0,0,${LOOK_VIGNETTE})`);
+            ctx.fillStyle = vg;
+            ctx.fillRect(0, 0, W, H);
 
-        // Calm veil: mute the scene, more while the snake is moving
-        ctx.fillStyle = rgba(pal.veil, playing ? 0.42 : 0.1);
-        ctx.fillRect(0, 0, W, H);
+            // Calm veil: mute the scene, more while the snake is moving
+            ctx.fillStyle = rgba(pal.veil, playing ? 0.42 : 0.1);
+            ctx.fillRect(0, 0, W, H);
+        }
 
         // A weather change cross-fades from the last picture instead of cutting
         if (S.prev && S.fade > 0) {
