@@ -151,22 +151,27 @@ async function gpuBench() {
     const all = async fn => { for (const p of await pages()) { const c = await connect(p.webSocketDebuggerUrl); try { await fn(c, p); } finally { c.close(); } } };
     const codes = flag('full') ? CODES : SUBSET;
     const rows = [];
+    const clean = url => url.replace(/&wx=\d+/, '').replace(/&power=\w+/, '');
     for (const code of codes) {
-        await all((c, p) => c.send('Page.navigate', { url: p.url.replace(/&wx=\d+/, '').replace(/&power=\w+/, '') + `&wx=${code}&power=ac` }));
+        // A change of the address fragment alone does not reload the page, so reload explicitly
+        await all(async (c, p) => { await c.send('Page.navigate', { url: clean(p.url) + `&wx=${code}&power=ac` }); await c.send('Page.reload', { ignoreCache: true }); });
         await sleep(5000);
         await all(c => c.evaluate('wallpaperPaused(true); 1'));
         await sleep(1500);
         const base = await sample(3000);
         await all(c => c.evaluate('wallpaperPaused(false); 1'));
         await sleep(1500);
+        await all(c => c.evaluate('globalThis.__WP_STATS__ = { frames: 0 }; 1'));
         const load = await sample(4000);
-        rows.push({ code, name: NAMES[code], base, load });
-        console.log(`${String(code).padStart(2)} ${NAMES[code].padEnd(26)} paused ${base} %  running ${load} %  (+${load - base})`);
+        const fps = [];
+        await all(async c => fps.push(((await c.evaluate('__WP_STATS__.frames')) / 4).toFixed(1)));
+        rows.push({ code, name: NAMES[code], base, load, fps: fps.join(' / ') });
+        console.log(`${String(code).padStart(2)} ${NAMES[code].padEnd(26)} paused ${base} %  running ${load} %  (+${load - base})  frames/s per display ${fps.join(' / ')}`);
     }
-    await all((c, p) => c.send('Page.navigate', { url: p.url.replace(/&wx=\d+/, '').replace(/&power=\w+/, '') }));
+    await all(async (c, p) => { await c.send('Page.navigate', { url: clean(p.url) }); await c.send('Page.reload', { ignoreCache: true }); });
     fs.mkdirSync(OUT, { recursive: true });
-    fs.writeFileSync(path.join(OUT, 'gpu-latest.md'), '| Code | Weather | GPU paused | GPU running | Added |\n|---|---|---|---|---|\n' +
-        rows.map(r => `| ${r.code} | ${r.name} | ${r.base} % | ${r.load} % | ${r.load - r.base} |`).join('\n') + '\n');
+    fs.writeFileSync(path.join(OUT, 'gpu-latest.md'), '| Code | Weather | GPU paused | GPU running | Added | Frames/s per display |\n|---|---|---|---|---|---|\n' +
+        rows.map(r => `| ${r.code} | ${r.name} | ${r.base} % | ${r.load} % | ${r.load - r.base} | ${r.fps} |`).join('\n') + '\n');
 }
 
 async function main() {
