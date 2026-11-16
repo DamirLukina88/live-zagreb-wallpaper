@@ -572,13 +572,12 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     }
 
     // Wallpaper: on a sharp canvas (scale above 0.5) the windows would be hard one-pixel
-    // rectangles. They look right at half resolution, where each one is a small soft glow, so the
-    // point lights and their reflections are drawn on a half-resolution layer of the scene
-    // rectangle and scaled up. The flood wash is smooth already and goes straight to the canvas.
+    // rectangles and the floodlit walls would show the cut-out's edges. Both look right at half
+    // resolution (the low-quality look, which the user prefers), so all the lights and their
+    // reflections are drawn on a half-resolution layer of the scene rectangle and scaled up.
     let lightsBuf = null;
     function drawLightsSoft(f, geom, k) {
         if (k <= 0.01) return;
-        drawLights(f, geom, k, ZAGREB_LIGHTS, 'flood');
         const q = 0.5 / S.scale;
         const w = Math.max(1, Math.ceil(geom.W * q)), h = Math.max(1, Math.ceil(geom.H * q));
         const c = lightsBuf || (lightsBuf = document.createElement('canvas'));
@@ -589,7 +588,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             ox: 0, oy: 0, W: w, H: h,
             drawX: (geom.drawX - geom.ox) * q, drawY: (geom.drawY - geom.oy) * q, drawW: geom.drawW * q, drawH: geom.drawH * q
         };
-        drawLights({ ...f, ctx: g, W: w, H: h }, low, k, ZAGREB_LIGHTS, 'points');
+        drawLights({ ...f, ctx: g, W: w, H: h }, low, k, ZAGREB_LIGHTS, 'all');
         f.ctx.drawImage(c, geom.ox, geom.oy, geom.W, geom.H);
     }
 
@@ -684,11 +683,19 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 ctx.arc(x, y, rw / 2, 0, 6.2832);
                 ctx.fill();
                 if (L.t === 'lamp') {
-                    // Faint pool of light under the lamp
-                    ctx.fillStyle = `rgba(${rgb},${(a * 0.1).toFixed(3)})`;
-                    ctx.beginPath();
-                    ctx.ellipse(x, y + rw * 2.5, rw * 5 * haze, rw * 1.6, 0, 0, 6.2832);
-                    ctx.fill();
+                    // Faint pool of light under the lamp, fading out to its edge (a flat ellipse
+                    // showed as a ring)
+                    const pr = rw * 5 * haze, ph = rw * 1.6;
+                    ctx.save();
+                    ctx.translate(x, y + rw * 2.5);
+                    ctx.scale(1, ph / pr);
+                    const pg = ctx.createRadialGradient(0, 0, 0, 0, 0, pr);
+                    pg.addColorStop(0, `rgba(${rgb},${(a * 0.15).toFixed(3)})`);
+                    pg.addColorStop(0.5, `rgba(${rgb},${(a * 0.07).toFixed(3)})`);
+                    pg.addColorStop(1, `rgba(${rgb},0)`);
+                    ctx.fillStyle = pg;
+                    ctx.fillRect(-pr, -pr, pr * 2, pr * 2);
+                    ctx.restore();
                 }
             }
         });
