@@ -589,7 +589,12 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             drawX: (geom.drawX - geom.ox) * q, drawY: (geom.drawY - geom.oy) * q, drawW: geom.drawW * q, drawH: geom.drawH * q
         };
         drawLights({ ...f, ctx: g, W: w, H: h }, low, k, ZAGREB_LIGHTS, 'all');
+        // The layer is soft already, so the cheapest smoothing scales it up with no visible
+        // difference; 'high' cost about 140 ms per redraw on a 4K display at night (2026-11-17)
+        const prevQ = f.ctx.imageSmoothingQuality;
+        f.ctx.imageSmoothingQuality = 'low';
         f.ctx.drawImage(c, geom.ox, geom.oy, geom.W, geom.H);
+        f.ctx.imageSmoothingQuality = prevQ;
     }
 
     // k: how strongly the lights are on, 0..1
