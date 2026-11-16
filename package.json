@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Zagreb Cathedral terrace live wallpaper for KDE Plasma 6 and Lively Wallpaper",
   "scripts": {
-    "build": "node src/wallpaper/build.mjs"
+    "build": "node src/wallpaper/build.mjs",
+    "bench": "node tools/bench.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"

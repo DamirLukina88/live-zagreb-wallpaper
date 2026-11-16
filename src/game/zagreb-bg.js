@@ -1450,6 +1450,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     }
 
     function frame(dtReal, playing) {
+        // Benchmark hook (tools/bench.mjs): count frames and time them when the page asks for it
+        const stats = globalThis.__WP_STATS__ || null;
+        const t0 = stats ? performance.now() : 0;
         const { W, H, wx } = S;
         const dt = dtReal * (playing ? 0.25 : 1);
         S.t += dt;
@@ -1580,6 +1583,14 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         if (imgLoaded) S.drawn = true;
         S.blank = !imgLoaded;
         if (S.shown) show();
+        if (stats) {
+            const ms = performance.now() - t0;
+            stats.frames = (stats.frames || 0) + 1;
+            stats.ms = (stats.ms || 0) + ms;
+            stats.max = Math.max(stats.max || 0, ms);
+            stats.w = W;
+            stats.h = H;
+        }
     }
 
     // The canvases start transparent (CSS) and fade in once there is a picture worth showing

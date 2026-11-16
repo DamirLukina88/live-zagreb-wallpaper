@@ -30,6 +30,7 @@ function readHash() {
         clock: p.get('clock') || null,
         wx: p.has('wx') ? parseInt(p.get('wx'), 10) : null,
         season: p.get('season') || null,
+        power: p.get('power') || null,
         layout: p.get('layout') || null,
         view: rect(p.get('view')),
         desk: rect(p.get('desk'), 2),
@@ -132,7 +133,7 @@ export function updateSettings(next, immediate = false) {
 const fromHash = readHash();
 const stored = readStored();
 
-// clock, wx and season are test overrides (hash only), used by the render checks
+// clock, wx, season and power are test overrides (hash only), used by the render checks and the benchmark
 export const settings = {
     city: fromHash.city || stored.city || 'Zagreb',
     lang: fromHash.lang || stored.lang || 'hr',
@@ -141,6 +142,7 @@ export const settings = {
     clock: fromHash.clock ? new Date(fromHash.clock) : null,
     wx: fromHash.wx !== null && !isNaN(fromHash.wx) ? fromHash.wx : null,
     season: fromHash.season || null,
+    power: fromHash.power === 'battery' || fromHash.power === 'ac' ? fromHash.power : null,
     layout: (fromHash.layout || stored.layout) === 'span' ? 'span' : 'clone',
     view: fromHash.view,
     desk: fromHash.desk,

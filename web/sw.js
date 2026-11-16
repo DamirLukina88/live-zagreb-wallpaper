@@ -1,6 +1,6 @@
 // studio/wallpaper/web/sw.js
 // Offline-resilient Service Worker for GitHub Pages auto-updates.
-const CACHE_NAME = 'live-zagreb-wallpaper-a2b78a4a2efb';
+const CACHE_NAME = 'live-zagreb-wallpaper-6a417d7d4287';
 const ASSETS = [
     './',
     './index.html',
