@@ -755,18 +755,18 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 return sum / norm;
             };
 
-            // The outline: a wide body sitting on the base line, with towers rising from it
-            const baseY = H * 0.74;
+            // The outline: a rounded heap of overlapping lobes, widest low down and domed on top
+            const baseY = H * 0.66;
             const lobes = [];
             const cx0 = W * (0.47 + 0.06 * rnd());
-            lobes.push({ x: cx0, y: baseY - H * 0.1, rx: W * (0.27 + 0.05 * rnd()), ry: H * (0.17 + 0.04 * rnd()) });
-            const towers = 3 + Math.floor(rnd() * 3);
-            for (let i = 0; i < towers; i++) {
+            lobes.push({ x: cx0, y: baseY - H * 0.08, rx: W * (0.25 + 0.05 * rnd()), ry: H * (0.17 + 0.04 * rnd()) });
+            const extra = 5 + Math.floor(rnd() * 3);
+            for (let i = 0; i < extra; i++) {
                 const off = (rnd() - 0.5) * 2; // -1 left .. 1 right
-                const tall = 1 - 0.55 * Math.abs(off); // towers are highest near the middle
-                const rx = W * (0.08 + 0.07 * rnd()) * (0.75 + 0.45 * tall);
-                const ry = rx * (0.62 + 0.25 * rnd());
-                lobes.push({ x: cx0 + off * W * 0.21, y: baseY - H * (0.14 + 0.3 * tall * (0.6 + 0.4 * rnd())), rx, ry });
+                const dome = Math.sqrt(1 - 0.8 * off * off); // the heap is highest near the middle
+                const rx = W * (0.07 + 0.07 * rnd()) * (0.7 + 0.5 * dome);
+                const ry = rx * (0.7 + 0.25 * rnd());
+                lobes.push({ x: cx0 + off * W * 0.24, y: baseY - H * (0.06 + 0.3 * dome * (0.35 + 0.65 * rnd())), rx, ry });
             }
             // Where the cloud's top is in each column, for shading from the top down (smoothed, so
             // the side of a tower leaves no vertical line in the shadow)
@@ -802,30 +802,37 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                     // Warp the coordinates a little so the billows curl
                     const wx = x + (fbm(x * fq * 0.8 + 31, y * fq * 0.8 + 7, 2) - 0.5) * W * 0.09;
                     const wy = y + (fbm(x * fq * 0.8 + 3, y * fq * 0.8 + 53, 2) - 0.5) * H * 0.12;
-                    let e = -1;
+                    // Lobes melt into one another (a smooth union), so the outline has no steps.
+                    // Below the base line each lobe is squashed, which flattens the underside.
+                    let sum = 0;
                     for (const l of lobes) {
-                        const dx = (wx - l.x) / l.rx, dy = (wy - l.y) / l.ry;
-                        const d = 1 - Math.sqrt(dx * dx + dy * dy);
-                        if (d > e) e = d;
+                        const dx = (wx - l.x) / l.rx;
+                        let dy = (wy - l.y) / l.ry;
+                        if (wy > baseY) dy += (wy - baseY) / l.ry * 0.3;
+                        sum += Math.exp(7 * (1 - Math.sqrt(dx * dx + dy * dy)));
                     }
-                    if (e < -0.6) continue;
+                    const e = Math.log(sum) / 7;
+                    if (e < -0.7) continue;
                     const n = fbm(x * fq, y * fq * 1.2, 5, true); // about 0.1 in a crease .. 0.6 on a lump
-                    // A flat, soft base: the cloud ends just under the base line
-                    const flat = smooth(baseY + H * 0.09, baseY - H * 0.03, y + (n - 0.3) * H * 0.08);
+                    const soft = fbm(x * fq * 1.3 + 11, y * fq * 1.3 + 71, 4); // plain fuzz, about 0.3 .. 0.7
+                    // The underside has no edge: it thins out downward, unevenly, like haze under a cloud
+                    const low = fbm(x * fq * 0.6 + 5, 3.3, 2);
+                    const flat = smooth(baseY + H * 0.2, baseY - H * 0.12, y + (low - 0.5) * H * 0.2 + (soft - 0.5) * H * 0.12);
                     // Keep clear of the sprite's edges
                     const edge = smooth(0, W * 0.04, Math.min(x, W - 1 - x, y, H - 1 - y));
-                    const alpha = smooth(0.0, 0.2, e + (n - 0.34) * 1.15) * flat * edge;
+                    // Lumpy on top, fuzzier toward the base
+                    const top = smooth(baseY + H * 0.05, baseY - H * 0.25, y);
+                    const rough = (n - 0.34) * (0.45 + 0.6 * top) + (soft - 0.5) * (0.9 - 0.45 * top);
+                    const alpha = smooth(-0.06, 0.42 - 0.2 * top, e + rough) * flat * edge;
                     if (alpha <= 0.004) continue;
                     const i = (y * W + x) * 4;
                     ib.data[i] = ib.data[i + 1] = ib.data[i + 2] = 255;
                     ib.data[i + 3] = Math.round(alpha * 255);
 
-                    // Shadow: grows toward the base, lies in the creases between lumps, and is
-                    // uneven, as on a real cloud
-                    const depth = clamp((y - colTop[x]) / Math.max(1, baseY - colTop[x]));
-                    const crease = smooth(0.3, 0.1, n) * 0.5 * smooth(0.0, 0.25, depth);
-                    const patch = 0.6 + 0.4 * fbm(x * fq * 0.5 + 80, y * fq * 0.5 + 40, 2);
-                    const sh = clamp((0.05 + 0.95 * smooth(0.3, 1.0, depth)) * patch + crease);
+                    // Shadow: one even gradient that grows toward the base. No patches and no dark
+                    // creases: on a soft cloud they read as dirty spots.
+                    const depth = clamp((y - colTop[x]) / Math.max(1, baseY + H * 0.1 - colTop[x]));
+                    const sh = 0.85 * smooth(0.2, 1.0, depth);
                     is.data[i] = is.data[i + 1] = is.data[i + 2] = 255;
                     is.data[i + 3] = Math.round(alpha * sh * 255);
                     iu.data[i] = iu.data[i + 1] = iu.data[i + 2] = 255;
