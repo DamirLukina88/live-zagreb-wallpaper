@@ -372,16 +372,17 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
     // Rain ripples on the wet terrace. They live only on the floor itself: the floor starts at
     // 74.6% of the artwork's height (below the kerb), so ripples are placed from 77% down.
+    // Sizes are fractions of the painting's width, so a ring is as large on a 4K display as on a
+    // small one. Light rain uses the first few drops of the pool, heavy rain all of them.
     const RIPPLE_TOP = 0.77, RIPPLE_SPAN = 0.21;
     const RIPPLES = [];
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 40; i++) {
         RIPPLES.push({
-            x: 0.08 + Math.random() * 0.84,
+            x: 0.03 + Math.random() * 0.94,
             y: RIPPLE_TOP + Math.random() * RIPPLE_SPAN,
-            r: Math.random() * 18,
-            maxR: 10 + Math.random() * 20,
+            maxR: 0.012 + Math.random() * 0.016,
             life: Math.random(),
-            speed: 0.4 + Math.random() * 0.5
+            speed: 0.45 + Math.random() * 0.5
         });
     }
 
@@ -570,9 +571,32 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         return c;
     }
 
+    // Wallpaper: on a sharp canvas (scale above 0.5) the windows would be hard one-pixel
+    // rectangles. They look right at half resolution, where each one is a small soft glow, so the
+    // point lights and their reflections are drawn on a half-resolution layer of the scene
+    // rectangle and scaled up. The flood wash is smooth already and goes straight to the canvas.
+    let lightsBuf = null;
+    function drawLightsSoft(f, geom, k) {
+        if (k <= 0.01) return;
+        drawLights(f, geom, k, ZAGREB_LIGHTS, 'flood');
+        const q = 0.5 / S.scale;
+        const w = Math.max(1, Math.ceil(geom.W * q)), h = Math.max(1, Math.ceil(geom.H * q));
+        const c = lightsBuf || (lightsBuf = document.createElement('canvas'));
+        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+        const g = c.getContext('2d');
+        g.clearRect(0, 0, w, h);
+        const low = {
+            ox: 0, oy: 0, W: w, H: h,
+            drawX: (geom.drawX - geom.ox) * q, drawY: (geom.drawY - geom.oy) * q, drawW: geom.drawW * q, drawH: geom.drawH * q
+        };
+        drawLights({ ...f, ctx: g, W: w, H: h }, low, k, ZAGREB_LIGHTS, 'points');
+        f.ctx.drawImage(c, geom.ox, geom.oy, geom.W, geom.H);
+    }
+
     // k: how strongly the lights are on, 0..1
     // list: the painting's lights, or the extra lamps along the extended railing (span)
-    function drawLights(f, geom, k, list = ZAGREB_LIGHTS) {
+    // part: 'all', or only the 'flood' wash, or only the 'points' (see drawLightsSoft)
+    function drawLights(f, geom, k, list = ZAGREB_LIGHTS, part = 'all') {
         if (k <= 0.01) return;
         const { ctx, t, wx, W, H } = f;
         const sc = geom.drawW / 1200;
@@ -583,7 +607,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // Rain breaks the mirror up: reflections shimmer more and lose a little strength
         const wet = wx.rain > 0.15 ? 1 : 0;
 
-        const flood = floodLayer(list, geom);
+        const flood = part === 'points' ? null : floodLayer(list, geom);
         if (flood) {
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
@@ -599,6 +623,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             ctx.drawImage(flood, geom.ox, geom.oy);
             ctx.restore();
         }
+        if (part === 'flood') return;
 
         list.forEach((L, i) => {
             if (L.t === 'flood') return;
@@ -689,61 +714,134 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // ------------------------------------------------------------------
     // Clouds and the lit scenery layer
     // ------------------------------------------------------------------
-    // Cloud shapes are white masks built once from soft overlapping puffs; each frame's colours
-    // are stamped onto copies only when the light changes.
-    const CLOUD_VARIANTS = 4;
-    let cloudMasks = null;
-    function buildCloudMasks() {
-        const masks = [];
-        for (let v = 0; v < CLOUD_VARIANTS; v++) {
+    // Cloud shapes are white masks built once, on first use; the hour's colours are stamped onto
+    // copies only when the light changes, and only for the shapes that are on screen.
+    // A shape is a cumulus outline (a low wide body with a few towers on top) eroded by fractal
+    // noise, so the edge billows and frays instead of being a heap of round puffs. `shade` is the
+    // cloud's own shadow (its underside and the creases between billows), `under` the base that
+    // catches a low sun. Each cloud is also mirrored and re-proportioned from its seed, so eight
+    // shapes give many different clouds.
+    const CLOUD_VARIANTS = 8;
+    const cloudMasks = [];
+    function cloudMask(v) {
+        if (cloudMasks[v]) return cloudMasks[v];
+        // Always-low quality keeps the small sprites; a sharp picture gets finer ones
+        const fine = !(WP.__WP_SCALES__ && Number(WP.__WP_SCALES__.still) <= 0.5);
+        const W = fine ? 384 : 256, H = W / 2;
+        const smooth = (a, b, v) => { const t = clamp((v - a) / (b - a)); return t * t * (3 - 2 * t); };
+        {
             const rnd = rng(v * 977 + 13);
-            const body = document.createElement('canvas');
-            body.width = 256;
-            body.height = 128;
-            const g = body.getContext('2d');
-            // A heap of puffs: big ones low in the middle, small ones bubbling up along the top
-            for (let i = 0; i < 22; i++) {
-                const big = i < 7;
-                const x = big ? 64 + rnd() * 128 : 56 + rnd() * 144;
-                const hump = clamp(1 - Math.pow((x - 128) / 100, 2));
-                const r = big ? 20 + 16 * rnd() : 9 + 12 * rnd();
-                const y = big ? 92 - r * 0.7 : 92 - (18 + 46 * hump * rnd()) - r * 0.3;
-                const puff = g.createRadialGradient(x, y, r * 0.35, x, y, r);
-                puff.addColorStop(0, 'rgba(255,255,255,1)');
-                puff.addColorStop(0.72, 'rgba(255,255,255,0.88)');
-                puff.addColorStop(1, 'rgba(255,255,255,0)');
-                g.fillStyle = puff;
-                g.fillRect(x - r, y - r, r * 2, r * 2);
-            }
-            // Flat, soft base
-            g.globalCompositeOperation = 'destination-out';
-            const base = g.createLinearGradient(0, 90, 0, 110);
-            base.addColorStop(0, 'rgba(0,0,0,0)');
-            base.addColorStop(1, 'rgba(0,0,0,1)');
-            g.fillStyle = base;
-            g.fillRect(0, 90, 256, 38);
+            // Value noise on a seeded lattice, summed over octaves
+            const N = 64, lattice = new Float32Array(N * N);
+            for (let i = 0; i < lattice.length; i++) lattice[i] = rnd();
+            const noise = (x, y) => {
+                const xi = Math.floor(x), yi = Math.floor(y);
+                const fx = x - xi, fy = y - yi;
+                const u = fx * fx * (3 - 2 * fx), w = fy * fy * (3 - 2 * fy);
+                const x0 = xi & 63, x1 = (xi + 1) & 63, y0 = (yi & 63) * N, y1 = ((yi + 1) & 63) * N;
+                const a = lattice[y0 + x0], b = lattice[y0 + x1], c = lattice[y1 + x0], d = lattice[y1 + x1];
+                return a + (b - a) * u + (c - a + (a - b + d - c) * u) * w;
+            };
+            // billow: rounded lumps with sharp creases between them (cauliflower), not plain fuzz
+            const fbm = (x, y, oct, billow) => {
+                let sum = 0, amp = 0.5, norm = 0;
+                for (let o = 0; o < oct; o++) {
+                    sum += (billow ? Math.abs(2 * noise(x, y) - 1) : noise(x, y)) * amp;
+                    norm += amp;
+                    x = x * 2.03 + 17.1;
+                    y = y * 2.03 + 9.7;
+                    amp *= 0.55;
+                }
+                return sum / norm;
+            };
 
-            const lower = (from, to) => {
+            // The outline: a wide body sitting on the base line, with towers rising from it
+            const baseY = H * 0.74;
+            const lobes = [];
+            const cx0 = W * (0.47 + 0.06 * rnd());
+            lobes.push({ x: cx0, y: baseY - H * 0.1, rx: W * (0.27 + 0.05 * rnd()), ry: H * (0.17 + 0.04 * rnd()) });
+            const towers = 3 + Math.floor(rnd() * 3);
+            for (let i = 0; i < towers; i++) {
+                const off = (rnd() - 0.5) * 2; // -1 left .. 1 right
+                const tall = 1 - 0.55 * Math.abs(off); // towers are highest near the middle
+                const rx = W * (0.08 + 0.07 * rnd()) * (0.75 + 0.45 * tall);
+                const ry = rx * (0.62 + 0.25 * rnd());
+                lobes.push({ x: cx0 + off * W * 0.21, y: baseY - H * (0.14 + 0.3 * tall * (0.6 + 0.4 * rnd())), rx, ry });
+            }
+            // Where the cloud's top is in each column, for shading from the top down (smoothed, so
+            // the side of a tower leaves no vertical line in the shadow)
+            const rawTop = new Float32Array(W).fill(baseY), colTop = new Float32Array(W);
+            for (let x = 0; x < W; x++) {
+                for (const l of lobes) {
+                    const k = (x - l.x) / l.rx;
+                    if (Math.abs(k) < 1) rawTop[x] = Math.min(rawTop[x], l.y - l.ry * Math.sqrt(1 - k * k));
+                }
+            }
+            const R = Math.round(W * 0.05);
+            for (let x = 0; x < W; x++) {
+                let sum = 0, n = 0;
+                for (let k = -R; k <= R; k++) {
+                    const j = x + k;
+                    if (j >= 0 && j < W) { sum += rawTop[j]; n++; }
+                }
+                colTop[x] = sum / n;
+            }
+
+            const mk = () => {
                 const c = document.createElement('canvas');
-                c.width = 256;
-                c.height = 128;
-                const x = c.getContext('2d');
-                x.drawImage(body, 0, 0);
-                x.globalCompositeOperation = 'destination-in';
-                const fade = x.createLinearGradient(0, from, 0, to);
-                fade.addColorStop(0, 'rgba(0,0,0,0)');
-                fade.addColorStop(1, 'rgba(0,0,0,1)');
-                x.fillStyle = fade;
-                x.fillRect(0, 0, 256, 128);
+                c.width = W;
+                c.height = H;
                 return c;
             };
-            masks.push({ body, shade: lower(48, 96), under: lower(74, 98) });
+            const body = mk(), shade = mk(), under = mk();
+            const gb = body.getContext('2d'), gs = shade.getContext('2d'), gu = under.getContext('2d');
+            const ib = gb.createImageData(W, H), is = gs.createImageData(W, H), iu = gu.createImageData(W, H);
+            const fq = 5 / W; // the largest billows are about a fifth of the cloud wide
+            for (let y = 0; y < H; y++) {
+                for (let x = 0; x < W; x++) {
+                    // Warp the coordinates a little so the billows curl
+                    const wx = x + (fbm(x * fq * 0.8 + 31, y * fq * 0.8 + 7, 2) - 0.5) * W * 0.09;
+                    const wy = y + (fbm(x * fq * 0.8 + 3, y * fq * 0.8 + 53, 2) - 0.5) * H * 0.12;
+                    let e = -1;
+                    for (const l of lobes) {
+                        const dx = (wx - l.x) / l.rx, dy = (wy - l.y) / l.ry;
+                        const d = 1 - Math.sqrt(dx * dx + dy * dy);
+                        if (d > e) e = d;
+                    }
+                    if (e < -0.6) continue;
+                    const n = fbm(x * fq, y * fq * 1.2, 5, true); // about 0.1 in a crease .. 0.6 on a lump
+                    // A flat, soft base: the cloud ends just under the base line
+                    const flat = smooth(baseY + H * 0.09, baseY - H * 0.03, y + (n - 0.3) * H * 0.08);
+                    // Keep clear of the sprite's edges
+                    const edge = smooth(0, W * 0.04, Math.min(x, W - 1 - x, y, H - 1 - y));
+                    const alpha = smooth(0.0, 0.2, e + (n - 0.34) * 1.15) * flat * edge;
+                    if (alpha <= 0.004) continue;
+                    const i = (y * W + x) * 4;
+                    ib.data[i] = ib.data[i + 1] = ib.data[i + 2] = 255;
+                    ib.data[i + 3] = Math.round(alpha * 255);
+
+                    // Shadow: grows toward the base, lies in the creases between lumps, and is
+                    // uneven, as on a real cloud
+                    const depth = clamp((y - colTop[x]) / Math.max(1, baseY - colTop[x]));
+                    const crease = smooth(0.3, 0.1, n) * 0.5 * smooth(0.0, 0.25, depth);
+                    const patch = 0.6 + 0.4 * fbm(x * fq * 0.5 + 80, y * fq * 0.5 + 40, 2);
+                    const sh = clamp((0.05 + 0.95 * smooth(0.3, 1.0, depth)) * patch + crease);
+                    is.data[i] = is.data[i + 1] = is.data[i + 2] = 255;
+                    is.data[i + 3] = Math.round(alpha * sh * 255);
+                    iu.data[i] = iu.data[i + 1] = iu.data[i + 2] = 255;
+                    iu.data[i + 3] = Math.round(alpha * smooth(0.62, 1.0, depth) * 255);
+                }
+            }
+            gb.putImageData(ib, 0, 0);
+            gs.putImageData(is, 0, 0);
+            gu.putImageData(iu, 0, 0);
+            return (cloudMasks[v] = { body, shade, under });
         }
-        return masks;
     }
-    function stamp(mask, color) {
-        const c = document.createElement('canvas');
-        c.width = mask.width;
+    // One tinted copy of a mask; the canvas is kept and re-coloured when the light changes
+    function stamp(mask, color, into) {
+        const c = into || document.createElement('canvas');
+        c.width = mask.width; // also clears a reused canvas
         c.height = mask.height;
         const x = c.getContext('2d');
         x.drawImage(mask, 0, 0);
@@ -752,19 +850,16 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         x.fillRect(0, 0, c.width, c.height);
         return c;
     }
-    let cloudCache = { key: '', sprites: null };
-    function cloudSprites(L) {
-        const key = [L.cloudLit, L.cloudShade, L.glow, L.sheet].join('|');
-        if (cloudCache.key === key) return cloudCache.sprites;
-        cloudMasks = cloudMasks || buildCloudMasks();
-        const sprites = cloudMasks.map(m => ({
-            body: stamp(m.body, L.cloudLit),
-            shade: stamp(m.shade, L.cloudShade),
-            under: stamp(m.under, L.glow),
-            sheet: stamp(m.body, L.sheet)
-        }));
-        cloudCache = { key, sprites };
-        return sprites;
+    const CLOUD_TINT = { body: ['body', 'cloudLit'], shade: ['shade', 'cloudShade'], under: ['under', 'glow'], sheet: ['body', 'sheet'] };
+    const cloudCache = new Map(); // "variant|kind" -> { key, canvas }
+    function cloudSprite(L, variant, kind) {
+        const [mask, colour] = CLOUD_TINT[kind];
+        const id = variant + '|' + kind;
+        let hit = cloudCache.get(id);
+        if (hit && hit.key === L[colour]) return hit.canvas;
+        hit = { key: L[colour], canvas: stamp(cloudMask(variant)[mask], L[colour], hit && hit.canvas) };
+        cloudCache.set(id, hit);
+        return hit.canvas;
     }
 
     // Half-frozen terrace: milky sheets of ice with a few hairline cracks lie on the water, and
@@ -1139,6 +1234,25 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         return c;
     }
 
+    // Hail and snow grains fall fast. As small hard bright dots they make some monitors draw a dark
+    // trail behind each one (pixel overdrive), so they are soft-edged, a little less bright and
+    // stretched along their fall like a short motion blur.
+    let hailCanvas = null;
+    function hailSprite() {
+        if (hailCanvas) return hailCanvas;
+        const c = hailCanvas = document.createElement('canvas');
+        c.width = c.height = 32;
+        const g = c.getContext('2d');
+        const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+        grad.addColorStop(0, 'rgba(240,247,255,1)');
+        grad.addColorStop(0.45, 'rgba(235,245,255,0.8)');
+        grad.addColorStop(0.75, 'rgba(232,243,255,0.25)');
+        grad.addColorStop(1, 'rgba(232,243,255,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 32, 32);
+        return c;
+    }
+
     // ------------------------------------------------------------------
     // The scene's layers, called in order by frame() below
     // ------------------------------------------------------------------
@@ -1241,7 +1355,14 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             for (const p of list) {
                 const near = p.s > 0.95; // about one flake in twenty drifts past close up
                 const depth = (p.z - 0.4) / 0.6; // 0 far .. 1 near
-                const size = wx.grains ? p.r * 1.6 : near ? p.r * (2.2 + 1.4 * depth) : p.r * (0.75 + 1.0 * depth * depth);
+                if (wx.grains) {
+                    // Grains: small, fast and soft (see hailSprite)
+                    const w = Math.max(1.5, p.r * 1.7), h = w * 2.1;
+                    ctx.globalAlpha = (0.26 + 0.3 * depth) * bright;
+                    ctx.drawImage(flake, p.x - w, p.y - h, w * 2, h * 2);
+                    continue;
+                }
+                const size = near ? p.r * (2.2 + 1.4 * depth) : p.r * (0.75 + 1.0 * depth * depth);
                 ctx.globalAlpha = (near ? 0.26 : 0.4 + 0.5 * depth) * bright;
                 ctx.drawImage(flake, p.x - size, p.y - size, size * 2, size * 2);
             }
@@ -1255,7 +1376,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             const { ctx, wx, RW: W, RH: H } = f;
             const L = LIGHT;
             if (!L) return;
-            const spr = cloudSprites(L)[c.seed % CLOUD_VARIANTS];
+            const variant = c.seed % CLOUD_VARIANTS;
             const depth = c.d; // 0.45 far .. 1 near
 
             ctx.save();
@@ -1265,24 +1386,28 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 ctx.globalAlpha = (wx.thunder ? 0.34 : (wx.snow > 0 || wx.fog > 0.4) ? 0.04 : wx.rain > 0 ? 0.11 : 0.12) * (0.55 + 0.45 * depth);
                 // Spread over the whole sky (storms hang heavier overhead), so the sheet has no edge
                 const band = wx.thunder ? 0.6 : 0.9;
-                ctx.drawImage(spr.sheet, c.px - w / 2, f.RY + (L.horizonY - f.RY) * (0.02 + band * ((c.seed % 89) / 89)) - h / 2, w, h);
+                ctx.drawImage(cloudSprite(L, variant, 'sheet'), c.px - w / 2, f.RY + (L.horizonY - f.RY) * (0.02 + band * ((c.seed % 89) / 89)) - h / 2, w, h);
                 ctx.restore();
                 return;
             }
-            const w = c.s * Math.min(W * 0.34, H * 0.46) * (0.4 + 0.6 * depth), h = w * 0.5;
-            const x = c.px - w / 2;
+            // The same shape is mirrored and made a little flatter or taller from the cloud's seed
+            const w = c.s * Math.min(W * 0.34, H * 0.46) * (0.4 + 0.6 * depth);
+            const h = w * 0.5 * (0.86 + 0.3 * ((c.seed % 53) / 53));
             const skyH = L.horizonY - f.RY;
             const y = f.RY + skyH * (0.80 - 0.72 * depth) + ((c.seed % 97) / 97 - 0.5) * skyH * 0.08 - h / 2;
+            ctx.translate(c.px, 0);
+            if ((c.seed >> 3) & 1) ctx.scale(-1, 1);
+            const x = -w / 2;
             const a = 0.5 + 0.42 * depth;
             ctx.globalAlpha = a;
-            ctx.drawImage(spr.body, x, y, w, h);
+            ctx.drawImage(cloudSprite(L, variant, 'body'), x, y, w, h);
             ctx.globalAlpha = a * 0.6;
-            ctx.drawImage(spr.shade, x, y, w, h);
+            ctx.drawImage(cloudSprite(L, variant, 'shade'), x, y, w, h);
             // Low sun: the undersides nearest the sun catch its colour
             const warm = a * L.lowSun * L.cs * (0.35 + 0.65 * clamp(1 - Math.abs(c.px - L.sunX) / (W * 0.7)));
             if (warm > 0.02) {
                 ctx.globalAlpha = warm;
-                ctx.drawImage(spr.under, x, y, w, h);
+                ctx.drawImage(cloudSprite(L, variant, 'under'), x, y, w, h);
             }
             ctx.restore();
         },
@@ -1305,40 +1430,62 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 ctx.save();
 
                 // 2. Night lights: windows, clock, tower openings, lamps and floodlit areas
-                drawLights(f, geom, L.lights);
+                if (wallpaper() && S.scale > 0.5) drawLightsSoft(f, geom, L.lights);
+                else drawLights(f, geom, L.lights);
 
-                // 3. Rain ripples, only on the terrace floor: never on the kerb, the railing or the town
+                // 3. Rain ripples, only on the terrace floor: never on the kerb, the railing, the
+                // town or another display. Everything is clipped to the painting's floor.
                 if (wx.rain > 0.15) {
-                    const floorTopY = drawY + drawH * FLOOR_TOP;
+                    const floorTopY = drawY + drawH * FLOOR_TOP + 1;
                     const floorBottomY = drawY + drawH;
+                    const bright = 0.55 + 0.45 * L.lum;
+                    const rgb = L.lum < 0.3 ? '175, 200, 245' : '255, 255, 255';
+                    const count = Math.min(RIPPLES.length, Math.round(10 + 30 * wx.rain));
 
                     ctx.save();
-                    ctx.strokeStyle = L.lum < 0.3 ? 'rgba(160, 190, 240, 0.28)' : 'rgba(255, 255, 255, 0.35)';
-                    const sc = S.scale || 1;
-                    ctx.lineWidth = Math.max(1, Math.round(sc * 0.9));
+                    ctx.beginPath();
+                    ctx.rect(drawX, floorTopY, drawW, floorBottomY - floorTopY);
+                    ctx.clip();
+                    ctx.lineWidth = Math.max(1, drawW / 1100);
 
-                    RIPPLES.forEach(rp => {
+                    for (let i = 0; i < count; i++) {
+                        const rp = RIPPLES[i];
                         rp.life += f.dt * rp.speed;
                         if (rp.life >= 1) {
                             rp.life = 0;
-                            rp.x = 0.08 + Math.random() * 0.84;
+                            rp.x = 0.03 + Math.random() * 0.94;
                             rp.y = RIPPLE_TOP + Math.random() * RIPPLE_SPAN;
                         }
                         const rx = drawX + rp.x * drawW;
                         const ry = drawY + rp.y * drawH;
 
                         // Rings are smaller far away (near the railing) and larger close to the eye,
-                        // and a ring is drawn only if all of it lies on the floor
+                        // and a drop is drawn only if its largest ring lies wholly on the floor
                         const depth = (rp.y - FLOOR_TOP) / (1 - FLOOR_TOP);
-                        const currentR = rp.life * rp.maxR * (0.45 + 0.75 * depth) * sc;
-                        if (rx >= 0 && rx <= W && ry - currentR * 0.35 >= floorTopY + 1 && ry <= Math.min(H, floorBottomY)) {
-                            const alpha = (1 - rp.life) * (0.3 + 0.12 * L.lum);
-                            ctx.globalAlpha = alpha;
+                        const fullR = rp.maxR * drawW * (0.4 + 0.9 * depth);
+                        if (rx - fullR < drawX || rx + fullR > drawX + drawW) continue;
+                        if (ry - fullR * 0.35 < floorTopY || ry + fullR * 0.35 > floorBottomY) continue;
+
+                        const ring = (life, strength) => {
+                            if (life <= 0.02) return;
+                            const r = fullR * (0.12 + 0.88 * Math.sqrt(life));
+                            ctx.strokeStyle = `rgba(${rgb}, ${((1 - life) * strength * bright).toFixed(3)})`;
                             ctx.beginPath();
-                            ctx.ellipse(rx, ry, currentR, currentR * 0.35, 0, 0, 6.2832);
+                            ctx.ellipse(rx, ry, r, r * 0.35, 0, 0, 6.2832);
                             ctx.stroke();
+                        };
+                        ring(rp.life, 0.5);
+                        ring(rp.life - 0.3, 0.3); // a second ring follows the first
+                        if (rp.life < 0.2) {
+                            // The splash where the drop lands: a small bright crown that dies quickly
+                            const a = (1 - rp.life / 0.2) * 0.6 * bright;
+                            const sr = fullR * 0.16;
+                            ctx.fillStyle = `rgba(${rgb}, ${a.toFixed(3)})`;
+                            ctx.beginPath();
+                            ctx.ellipse(rx, ry - sr * 0.5, sr * 0.55, sr * (0.6 + rp.life * 4), 0, 0, 6.2832);
+                            ctx.fill();
                         }
-                    });
+                    }
                     ctx.restore();
                 }
 
@@ -1529,13 +1676,14 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         }
         if (pr.snow.length) zagrebStyle.snow(f, pr.snow);
         if (pr.hail.length) {
-            ctx.fillStyle = pal.hail;
-            ctx.beginPath();
+            const stone = hailSprite();
+            const bright = 0.45 + 0.55 * (LIGHT ? LIGHT.lum : 1);
             for (const p of pr.hail) {
-                ctx.moveTo(p.x + p.r, p.y);
-                ctx.arc(p.x, p.y, p.r, 0, 6.2832);
+                const w = Math.max(1.6, p.r * 1.15), h = w * 2.1;
+                ctx.globalAlpha = (0.5 + 0.22 * (p.z - 0.4) / 0.6) * bright;
+                ctx.drawImage(stone, p.x - w, p.y - h, w * 2, h * 2);
             }
-            ctx.fill();
+            ctx.globalAlpha = 1;
         }
 
         // Fog bands
