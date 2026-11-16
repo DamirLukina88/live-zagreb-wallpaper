@@ -1,1 +1,16 @@
 node_modules/
+
+# Built by "npm run build" (GitHub Actions builds and deploys; nothing built is committed)
+web/app.js
+web/index.html
+web/panel.css
+web/sw.js
+kde/skill-issue-wallpaper/contents/web/
+kde/skill-issue-wallpaper/contents/screenshot.jpg
+dist/
+
+# Benchmark and verify output (bench/baseline.json is kept)
+bench/latest.json
+bench/latest.md
+bench/gpu-latest.md
+bench/shots/

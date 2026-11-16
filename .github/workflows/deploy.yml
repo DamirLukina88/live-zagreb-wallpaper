@@ -1,34 +1,80 @@
-name: Deploy Live Zagreb Wallpaper to GitHub Pages
+name: Build, check and deploy Live Zagreb Wallpaper
 
+# main  -> build, verify, benchmark subset, deploy web/ to GitHub Pages (every desktop updates itself)
+# v* tag -> the same, plus the Linux and Windows setup archives attached to a GitHub Release
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify (manifests, versions, security policy, render matrix)
+        run: npm run verify
+        env:
+          CI: "true"
+      - name: Benchmark subset (still when calm and on battery, animated in rain)
+        run: npm run bench -- --ci
+        env:
+          CI: "true"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: "web"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: setup-archives
+          path: |
+            dist/Live-Zagreb-Wallpaper-Linux-Setup.tar.gz
+            dist/Live-Zagreb-Wallpaper-Windows-Setup.zip
+
   deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: "web"
-      - name: Deploy to GitHub Pages
-        id: deployment
+      - id: deployment
         uses: actions/deploy-pages@v4
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: setup-archives
+      - name: Attach the setup archives to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            Live-Zagreb-Wallpaper-Linux-Setup.tar.gz Live-Zagreb-Wallpaper-Windows-Setup.zip

@@ -1,12 +1,15 @@
 {
   "name": "live-zagreb-wallpaper",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Zagreb Cathedral terrace live wallpaper for KDE Plasma 6 and Lively Wallpaper",
   "scripts": {
     "build": "node src/wallpaper/build.mjs",
-    "bench": "node tools/bench.mjs"
+    "bench": "node tools/bench.mjs",
+    "sync-game": "node tools/sync-game.mjs",
+    "verify": "node tools/verify.mjs",
+    "check": "npm run build && npm run verify && npm run bench -- --ci"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"
