@@ -190,7 +190,7 @@ async function main() {
                 const r = await runCase(browser.port, base, list[i]);
                 r.problems = check(r);
                 rows[i] = r;
-                process.stdout.write(`${r.problems.length ? 'FAIL' : ' ok '} ${caseId(r).padEnd(28)} ${String(r.fps).padStart(5)} fps  ${String(r.drawMs).padStart(6)} ms  ${r.canvas}${r.problems.length ? '  ' + r.problems.join('; ') : ''}\n`);
+                process.stdout.write(`${r.problems.length ? 'FAIL' : ' ok '} ${caseId(r).padEnd(28)} ${String(r.fps).padStart(5)} fps  ${String(r.drawMs).padStart(6)} ms  ${String(r.busy).padStart(5)} % busy  ${r.canvas}${r.problems.length ? '  ' + r.problems.join('; ') : ''}\n`);
             }
         }));
     } finally {

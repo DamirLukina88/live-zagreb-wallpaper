@@ -1624,6 +1624,35 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         return out;
     }
 
+    // Overcast, rain, snow, storms and fog: a dozen faint sheets stretched across the whole sky.
+    // Drawn at full size they cost more than everything else in the frame together (the canvas
+    // rasterises each one over most of the screen), so they go onto a quarter-resolution layer
+    // that is scaled up once. Their masks are already stretched four to eight times, so the
+    // smaller layer loses nothing that can be seen.
+    const SHEET_SCALE = 0.25;
+    let sheetCanvas = null;
+    function drawSheets(fw) {
+        const q = SHEET_SCALE;
+        const w = Math.max(1, Math.ceil(S.W * q)), h = Math.max(1, Math.ceil(S.H * q));
+        if (!sheetCanvas) sheetCanvas = document.createElement('canvas');
+        if (sheetCanvas.width !== w || sheetCanvas.height !== h) {
+            sheetCanvas.width = w;
+            sheetCanvas.height = h;
+        }
+        const sx = sheetCanvas.getContext('2d');
+        sx.setTransform(1, 0, 0, 1, 0, 0);
+        sx.clearRect(0, 0, w, h);
+        sx.setTransform(q, 0, 0, q, -WORLD.OX * q, -WORLD.OY * q);
+        const fs = { ...fw, ctx: sx };
+        for (const c of S.clouds) zagrebStyle.cloud(fs, c);
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(sheetCanvas, 0, 0, w, h, 0, 0, w / q, h / q);
+        ctx.restore();
+    }
+
     function frame(dtReal, playing) {
         // Benchmark hook (tools/bench.mjs): count frames and time them when the page asks for it
         const stats = globalThis.__WP_STATS__ || null;
@@ -1663,7 +1692,8 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             }
             c.px = c.x * fw.W;
         }
-        for (const c of S.clouds) zagrebStyle.cloud(fw, c);
+        if (wx.cloud >= 0.9 || wx.fog > 0.4) drawSheets(fw);
+        else for (const c of S.clouds) zagrebStyle.cloud(fw, c);
 
         drawExtension(fw);
         zagrebStyle.scene(fw);
