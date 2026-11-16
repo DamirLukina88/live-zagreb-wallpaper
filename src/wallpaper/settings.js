@@ -25,12 +25,15 @@ function readHash() {
     return {
         city: p.get('city') || null,
         lang: p.get('lang') || null,
-        sharp: p.has('sharp') ? p.get('sharp') === '1' || p.get('sharp') === 'true' : null,
+        quality: p.get('quality') || null,
+        animBattery: p.has('animbattery') ? p.get('animbattery') === '1' : null,
         fps: num(p.get('fps')),
         clock: p.get('clock') || null,
         wx: p.has('wx') ? parseInt(p.get('wx'), 10) : null,
         season: p.get('season') || null,
         power: p.get('power') || null,
+        host: p.get('host') || null,
+        any: raw.length > 0,
         layout: p.get('layout') || null,
         view: rect(p.get('view')),
         desk: rect(p.get('desk'), 2),
@@ -51,7 +54,7 @@ function readStored() {
 // Geometry is not stored: it belongs to the display this page is on, which the host sends each time
 function store(s) {
     try {
-        localStorage.setItem('wp_settings', JSON.stringify({ city: s.city, lang: s.lang, sharp: s.sharp, fps: s.fps, layout: s.layout, slots: s.slots, slot: s.slot }));
+        localStorage.setItem('wp_settings', JSON.stringify({ city: s.city, lang: s.lang, quality: s.quality, animBattery: s.animBattery, fps: s.fps, layout: s.layout, slots: s.slots, slot: s.slot }));
     } catch {}
 }
 // Frames per second while precipitation moves (15 by default); otherwise the picture is still (zagreb-bg redraws it once a minute)
@@ -87,9 +90,16 @@ export function updateSettings(next, immediate = false) {
         settings.lang = next.lang === 'en' ? 'en' : 'hr';
         changed.push('lang');
     }
-    if (next.sharp !== undefined && next.sharp !== settings.sharp) {
-        settings.sharp = !!next.sharp;
-        changed.push('sharp');
+    if (next.quality !== undefined && next.quality !== null) {
+        const q = next.quality === 'low' ? 'low' : 'auto';
+        if (q !== settings.quality) {
+            settings.quality = q;
+            changed.push('quality');
+        }
+    }
+    if (next.animBattery !== undefined && next.animBattery !== null && !!next.animBattery !== settings.animBattery) {
+        settings.animBattery = !!next.animBattery;
+        changed.push('animBattery');
     }
     if (next.fps !== undefined && next.fps !== null) {
         const fps = clampFps(next.fps);
@@ -137,12 +147,18 @@ const stored = readStored();
 export const settings = {
     city: fromHash.city || stored.city || 'Zagreb',
     lang: fromHash.lang || stored.lang || 'hr',
-    sharp: fromHash.sharp !== null ? fromHash.sharp : stored.sharp ?? false,
+    // 'auto': a still picture is sharp, animated precipitation is half resolution; 'low': always half.
+    // (The old Sharp switch is gone: hosts that still send it are ignored.)
+    quality: (fromHash.quality || stored.quality) === 'low' ? 'low' : 'auto',
+    animBattery: fromHash.animBattery !== null ? fromHash.animBattery : stored.animBattery ?? false,
     fps: clampFps(fromHash.fps ?? stored.fps ?? DEFAULT_FPS),
     clock: fromHash.clock ? new Date(fromHash.clock) : null,
     wx: fromHash.wx !== null && !isNaN(fromHash.wx) ? fromHash.wx : null,
     season: fromHash.season || null,
     power: fromHash.power === 'battery' || fromHash.power === 'ac' ? fromHash.power : null,
+    // host package version (#host=kde-1.2.0); hosted: opened by a wallpaper host, not typed into a browser
+    host: fromHash.host,
+    hosted: fromHash.any,
     layout: (fromHash.layout || stored.layout) === 'span' ? 'span' : 'clone',
     view: fromHash.view,
     desk: fromHash.desk,
@@ -154,7 +170,7 @@ export const settings = {
 window.wallpaperSettings = function (s) {
     if (!s || typeof s !== 'object') return;
     updateSettings({
-        city: s.city, lang: s.lang, sharp: s.sharp, fps: s.fps,
+        city: s.city, lang: s.lang, quality: s.quality, animBattery: s.animBattery, fps: s.fps,
         layout: s.layout, view: s.view, desk: s.desk, scene: s.scene
     });
 };
@@ -176,6 +192,11 @@ window.livelyWallpaperPlaybackChanged = function (data) {
 };
 
 window.livelyPropertyListener = function (name, value) {
+    // Only Lively calls this: an old package has no #host= in its address, but it is a host
+    if (!settings.hosted) {
+        settings.hosted = true;
+        notify(["host"]);
+    }
     switch (name) {
         case 'city':
             updateSettings({ city: value });
@@ -183,8 +204,11 @@ window.livelyPropertyListener = function (name, value) {
         case 'lang':
             updateSettings({ lang: value === 1 || value === 'en' ? 'en' : 'hr' }, true);
             break;
-        case 'sharp':
-            updateSettings({ sharp: !!value }, true);
+        case 'quality': // dropdown: 0 automatic, 1 always low
+            updateSettings({ quality: value === 1 || value === 'low' ? 'low' : 'auto' }, true);
+            break;
+        case 'animBattery':
+            updateSettings({ animBattery: !!value }, true);
             break;
         case 'fps':
             updateSettings({ fps: value }, true);

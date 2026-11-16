@@ -21,24 +21,29 @@ import { codeToWx } from './weather-bg.js';
 
 const FRAME_MS = 1000 / 30;
 // Wallpaper: battery first. Every frame makes the desktop compositor repaint the whole display,
-// which is most of the GPU cost. The host page sets globalThis.__WP_FPS__: frames per second while
-// something animates (rain, snow, hail, a storm, the fade to new weather). Otherwise the picture is
-// still: clouds stop, and it is redrawn only every globalThis.__WP_IDLE_MS__ (default one minute)
-// so the sun, sky and night lights follow the clock. Without __WP_FPS__ (the game) every frame is
-// FRAME_MS and the clouds drift as before.
-function wpRates() {
-    const g = typeof globalThis !== 'undefined' ? globalThis : {};
-    const motion = typeof g.__WP_FPS__ === 'number' && g.__WP_FPS__ > 0 ? Math.min(g.__WP_FPS__, 30) : 0;
-    if (!motion) return null;
-    const idle = typeof g.__WP_IDLE_MS__ === 'number' && g.__WP_IDLE_MS__ >= 1000 ? g.__WP_IDLE_MS__ : 60000;
-    return { motion: 1000 / motion, idle };
-}
+// which is most of the GPU cost. The host page (src/wallpaper/main.js) sets on globalThis:
+//   __WP_FPS__         frames per second while something animates (rain, snow, hail, a storm, the
+//                      fade to new weather). Setting it turns wallpaper mode on: otherwise the
+//                      picture is STILL and is drawn only when the page calls start() (once a
+//                      minute, so the sun, sky, clouds and night lights follow the clock).
+//   __WP_ON_BATTERY__  true: never animate; rain and snow are a still picture too.
+//   __WP_SCALES__      { still, moving }: canvas scale for a still picture (sharp, it is drawn
+//                      once) and while precipitation animates (low, it is drawn every frame).
+// Without __WP_FPS__ (the game) every frame is FRAME_MS and the clouds drift as before.
+const WP = typeof globalThis !== 'undefined' ? globalThis : {};
+const wpFrameMs = () => (typeof WP.__WP_FPS__ === 'number' && WP.__WP_FPS__ > 0 ? 1000 / Math.min(WP.__WP_FPS__, 30) : 0);
+const WP_MAX_PIXELS = 3840 * 2160; // a sharp still picture never needs a larger canvas than 4K
 // Scale factor for canvas backing store: native 1:1 on standard screens, and up to 2x
 // on high-DPI/mobile displays (retina/AMOLED) so the 1200x896 artwork renders crisp.
-// Wallpaper: the host page may set globalThis.__WP_SCALE__ (calm 0.5 / sharp) to override this.
-function getScale() {
-    if (typeof globalThis !== 'undefined' && typeof globalThis.__WP_SCALE__ === 'number') return globalThis.__WP_SCALE__;
+// Wallpaper: __WP_SCALES__ (see above); lowRes = precipitation is animating.
+function getScale(lowRes) {
     const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+    const sc = WP.__WP_SCALES__;
+    if (sc && typeof sc === 'object') {
+        const want = Number(lowRes ? sc.moving : sc.still) || 0.5;
+        const cap = Math.sqrt(WP_MAX_PIXELS / Math.max(1, window.innerWidth * window.innerHeight));
+        return Math.min(want, cap);
+    }
     return Math.min(Math.max(1, dpr), 2);
 }
 const POOL = { rain: 160, snow: 140, hail: 60 };
@@ -926,7 +931,11 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     const GLASS_SCALE = 10;
     const GLASS_PAD = 18;
     const GLASS_BLUR_PX = 8;
-    const glassBuf = { work: null, blurred: null, grain: null };
+    const glassBuf = { work: null, grain: null };
+    // The blurred pane is costly (a blur filter) and shows no detail, so while precipitation
+    // animates it is rebuilt at most once a second per side; a still picture always rebuilds it.
+    const GLASS_REFRESH_MS = 1000;
+    const glassAt = {};
 
     function glassCanvas(slot, w, h) {
         const c = glassBuf[slot] || (glassBuf[slot] = document.createElement('canvas'));
@@ -1040,6 +1049,12 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             const sh = clamp(Math.round(rect.h / GLASS_SCALE), 48, 280) | 0;
             const pad = GLASS_PAD;
             const ww = sw + pad * 2, wh = sh + pad * 2;
+            const slot = side < 0 ? 'blurredL' : 'blurredR';
+            const stamp = `${ww}x${wh}|${rect.x},${rect.y},${rect.w},${rect.h}`;
+            const nowMs = performance.now();
+            const cached = glassAt[slot];
+            const reuse = moving() && cached && cached.stamp === stamp && nowMs - cached.at < GLASS_REFRESH_MS;
+            if (!reuse) {
             const work = glassCanvas('work', ww, wh);
             const wg = work.getContext('2d');
             wg.setTransform(1, 0, 0, 1, 0, 0);
@@ -1056,14 +1071,17 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             padWorkEdges(wg, pad, sw, sh);
 
             // 3. Heavy blur at downscaled resolution so no shapes remain visible
-            const blurred = glassCanvas('blurred', ww, wh);
-            const bg = blurred.getContext('2d');
+            const fresh = glassCanvas(slot, ww, wh);
+            const bg = fresh.getContext('2d');
             bg.setTransform(1, 0, 0, 1, 0, 0);
             bg.clearRect(0, 0, ww, wh);
             bg.save();
             bg.filter = `blur(${GLASS_BLUR_PX}px)`;
             bg.drawImage(work, 0, 0);
             bg.restore();
+            glassAt[slot] = { stamp, at: nowMs };
+            }
+            const blurred = glassBuf[slot];
 
             // 4. Draw back onto the world slice and apply the adaptive milk-glass finish
             ctx.save();
@@ -1347,8 +1365,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // ------------------------------------------------------------------
     // Engine: canvas size, particles, the frame and the loop
     // ------------------------------------------------------------------
-    function resize() {
-        const scale = getScale();
+    // keepFade: the canvas only changes scale (still <-> animating), so a running fade goes on
+    function resize(keepFade) {
+        const scale = getScale(lowRes());
         S.scale = scale;
         S.W = Math.max(1, Math.round(window.innerWidth * scale));
         S.H = Math.max(1, Math.round(window.innerHeight * scale));
@@ -1358,8 +1377,10 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         canvas.style.imageRendering = 'auto';
         ctx.imageSmoothingEnabled = true;
         if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-        S.prev = null; // a snapshot of the old size cannot be blended
-        S.fade = 0;
+        if (!keepFade) {
+            S.prev = null; // a snapshot of another window size cannot be blended
+            S.fade = 0;
+        }
         S.st = {};
         // This scene needs no grain or vignette layer; keep the overlay canvas clear
         overlay.width = S.W;
@@ -1470,15 +1491,18 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
         zagrebStyle.sky(fw);
 
-        // Clouds drift with the wind. In a span every display runs its own page, so the clouds'
-        // places come from the wall clock instead of each page's own running time: all displays
-        // agree and a cloud crosses from one to the next.
+        // Clouds drift with the wind. The wallpaper takes their places from the wall clock instead
+        // of the page's own running time: in a span every display runs its own page, and all of
+        // them must agree so a cloud crosses from one to the next. A still picture uses the clock
+        // to the whole minute, so displays redrawn a moment apart still show the same sky.
         const T = zagrebStyle.tune;
         const speed = c => (T.cloudBase + wx.wind * T.cloudWind) * c.d * (WORLD.RW / WORLD.DW);
-        const wall = WORLD.span ? (performance.timeOrigin + performance.now()) / 1000 : 0;
+        const byClock = WORLD.span || wallpaper();
+        let wall = byClock ? (performance.timeOrigin + performance.now()) / 1000 : 0;
+        if (still()) wall = Math.floor(wall / 60) * 60;
         for (const c of S.clouds) {
-            if (WORLD.span) {
-                if (!still()) c.x = (((c.x0 + 0.3 + wall * speed(c)) % 1.6) + 1.6) % 1.6 - 0.3;
+            if (byClock) {
+                c.x = (((c.x0 + 0.3 + wall * speed(c)) % 1.6) + 1.6) % 1.6 - 0.3;
             } else {
                 c.x += dt * speed(c);
                 if (c.x > 1.3) c.x = -0.3;
@@ -1574,7 +1598,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // A weather change cross-fades from the last picture instead of cutting
         if (S.prev && S.fade > 0) {
             ctx.globalAlpha = S.fade;
-            ctx.drawImage(S.prev, 0, 0);
+            ctx.drawImage(S.prev, 0, 0, W, H);
             ctx.globalAlpha = 1;
             S.fade -= dtReal / 1.2;
             if (S.fade <= 0) S.prev = null;
@@ -1604,40 +1628,32 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     const reduced = () => !!(mq && mq.matches);
     const isPlaying = () => document.body.classList.contains('playing-mode');
 
-    // Something on screen moves every frame (not just the slow sky): precipitation, lightning, a fade
-    const moving = () => {
+    // Wallpaper mode (see the top of this file)
+    const wallpaper = () => wpFrameMs() > 0;
+    const animOff = () => wallpaper() && !!WP.__WP_ON_BATTERY__;
+    const precip = () => {
         const wx = S.wx;
-        return wx.rain > 0 || wx.snow > 0 || wx.hail > 0 || wx.thunder || S.fade > 0;
+        return wx.rain > 0 || wx.snow > 0 || wx.hail > 0 || !!wx.thunder;
     };
-    const still = () => !!wpRates() && !moving();
-    function frameMs() {
-        const r = wpRates();
-        return r ? (moving() ? r.motion : r.idle) : FRAME_MS;
-    }
+    // Something on screen moves every frame (not just the slow sky): precipitation, lightning, a fade
+    const moving = () => !animOff() && (precip() || S.fade > 0);
+    const still = () => wallpaper() && !moving();
+    // The canvas is low resolution only while precipitation is drawn every frame
+    const lowRes = () => wallpaper() && !animOff() && precip();
 
-    let sleepTimer = null;
     function stopTimers() {
         if (S.anim) cancelAnimationFrame(S.anim);
         S.anim = null;
-        clearTimeout(sleepTimer);
-        sleepTimer = null;
-    }
-    // Long gaps (the wallpaper's idle rate) sleep on a timer instead of waking every display frame
-    function schedule() {
-        const wait = S.last + frameMs() - performance.now();
-        if (wait > 50) {
-            sleepTimer = setTimeout(() => {
-                sleepTimer = null;
-                S.anim = requestAnimationFrame(loop);
-            }, wait - 20);
-        } else {
-            S.anim = requestAnimationFrame(loop);
-        }
     }
 
     function loop(now) {
         S.anim = null;
         if (S.dead || !S.enabled) return;
+        if (animOff() && S.fade > 0) { // no fades without animation
+            S.fade = 0;
+            S.prev = null;
+        }
+        if (wallpaper() && getScale(lowRes()) !== S.scale) resize(true);
         // Paused or hidden: draw nothing more, but never leave a cleared (empty or half) canvas
         if (S.paused || document.hidden) {
             if (S.blank) frame(0, false);
@@ -1647,26 +1663,36 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             frame(0, false); // one still picture
             return;
         }
-        const ms = frameMs();
-        const elapsed = now - S.last;
-        if (elapsed >= ms - 1) {
-            S.last = now;
-            // A still wallpaper frame lets no time pass: the clouds and shimmer keep their place
-            frame(still() || !Number.isFinite(elapsed) ? 0 : Math.min(elapsed, 100) / 1000, isPlaying());
+        if (still()) {
+            // One picture; no time passes, and nothing is scheduled until the page calls again
+            frame(0, false);
+            return;
         }
-        schedule();
+        const ms = wpFrameMs() || FRAME_MS;
+        const elapsed = now - S.last;
+        // Half a display frame of tolerance, and the next frame is due one period after this one
+        // was due (not after it was drawn), so the average rate is the rate asked for
+        if (elapsed >= ms - 8) {
+            S.last = Number.isFinite(elapsed) && elapsed < ms * 2 ? S.last + ms : now;
+            frame(Number.isFinite(elapsed) ? Math.min(elapsed, 100) / 1000 : 0, isPlaying());
+            if (still()) {
+                // The fade just ended: draw the clean, sharp still picture and stop
+                loop(now);
+                return;
+            }
+        }
+        S.anim = requestAnimationFrame(loop);
     }
 
     function kick() {
         stopTimers();
         if (S.dead) return;
-        const now = performance.now();
-        S.last = -Infinity; // draw now, whatever the rate (the idle wallpaper waits a minute)
-        loop(now);
+        S.last = -Infinity; // draw now
+        loop(performance.now());
     }
 
-    const onResize = () => { resize(); kick(); };
-    resize();
+    const onResize = () => { resize(false); kick(); };
+    resize(false);
     seedClouds();
     window.addEventListener('resize', onResize);
     document.addEventListener('visibilitychange', kick);
@@ -1681,7 +1707,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 return;
             }
             // Keep the current picture to fade from, unless nothing has been shown yet
-            if (S.drawn && canvas.classList.contains('wx-ready') && !reduced()) {
+            if (S.drawn && canvas.classList.contains('wx-ready') && !reduced() && !animOff()) {
                 const snap = document.createElement('canvas');
                 snap.width = S.W; snap.height = S.H;
                 snap.getContext('2d').drawImage(canvas, 0, 0);
@@ -1714,7 +1740,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // { view: {x,y,w,h}, desk: {w,h}, scene: {x,y,w,h} } in CSS pixels (see SPAN)
         setLayout(span) {
             SPAN = span || null;
-            resize();
+            resize(false);
             seedClouds();
             kick();
         },

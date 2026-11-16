@@ -3,16 +3,20 @@ import { sunPosition } from '../game/sun.js';
 import { createZagrebBackground } from '../game/zagreb-bg.js';
 import { settings, onSettingsChange, onPauseChange } from './settings.js';
 import { fetchWeather, cachedWeather } from './weather-api.js';
-import { renderPanel, tr } from './panel.js';
+import { renderPanel, renderUpdateNotice, tr } from './panel.js';
+import { hostOutdated } from './version.js';
+import { onBattery, onPowerChange } from './power.js';
 
-// Calm mode renders at half resolution; Sharp follows the display up to 2x.
-// zagreb-bg.js reads this through its getScale().
-function applyScale() {
-    const dpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
-    globalThis.__WP_SCALE__ = settings.sharp ? Math.min(dpr, 2) : 0.5;
+// Battery first (see the top of src/game/zagreb-bg.js): the picture is still unless precipitation
+// animates, a still picture is sharp (it is drawn once), animation is half resolution, and on
+// battery nothing animates at all unless the user asked for it.
+function applyEngine() {
+    const dpr = window.devicePixelRatio || 1;
+    globalThis.__WP_FPS__ = settings.fps;
+    globalThis.__WP_SCALES__ = { still: settings.quality === 'low' ? 0.5 : Math.min(dpr, 2), moving: 0.5 };
+    globalThis.__WP_ON_BATTERY__ = onBattery() && !settings.animBattery;
 }
-applyScale();
-globalThis.__WP_FPS__ = settings.fps;
+applyEngine();
 
 const canvas = document.getElementById('weather-canvas');
 const overlay = document.getElementById('weather-overlay');
@@ -122,6 +126,11 @@ onSettingsChange((s, changed) => {
 
 onPauseChange(paused => bg.setPaused(paused));
 
+// Lively gives no address parameters to old packages, but it does call livelyPropertyListener
+const showUpdate = () => renderUpdateNotice(hostOutdated(settings.host, settings.hosted), settings.lang);
+showUpdate();
+onPowerChange(() => { applyEngine(); bg.start(); });
+
 function isDayAt(date, lat, lon) {
     if (lat != null && lon != null) return sunPosition(date, lat, lon).altitude > -0.833;
     const h = date.getHours();
@@ -191,7 +200,11 @@ function tick() {
     }
     if (Date.now() - lastFetch >= REFETCH_MS) refresh();
 }
-setInterval(tick, 60 * 1000);
+// The still picture is redrawn by this tick alone. It fires on the whole minute, so every display
+// (each runs its own page) redraws at the same moment with the same clouds.
+(function everyMinute() {
+    setTimeout(() => { tick(); everyMinute(); }, 60000 - (Date.now() % 60000) + 50);
+})();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
 document.addEventListener('resume', tick);
 
@@ -219,8 +232,8 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 
 onSettingsChange((s, changed) => {
     if (changed.includes('lang') && weather) renderPanel(weather, s.lang);
+    if (changed.includes('lang') || changed.includes('host')) showUpdate();
     if (changed.includes('city')) { retries = 0; refresh(); }
-    if (changed.includes('sharp')) { applyScale(); lastSpanKey = ''; window.dispatchEvent(new Event('resize')); }
     if (changed.includes('layout')) applyLayout();
-    if (changed.includes('fps')) globalThis.__WP_FPS__ = s.fps;
+    if (['quality', 'fps', 'animBattery'].some(k => changed.includes(k))) { applyEngine(); bg.start(); }
 });
