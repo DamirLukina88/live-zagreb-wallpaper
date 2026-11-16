@@ -9,7 +9,7 @@ WallpaperItem {
 
     // This plugin's version (the same as metadata.json; the build checks it). The page compares it
     // with the version it needs and shows "plugin update available" on the weather card if it is older.
-    readonly property string hostVersion: "1.2.0"
+    readonly property string hostVersion: "1.2.1"
     readonly property string quality: root.configuration.Quality === "low" ? "low" : "auto"
     readonly property int fps: Math.max(5, Math.min(30, Number(root.configuration.FrameRate) || 15))
     readonly property string onlineUrl: "https://damirlukina88.github.io/live-zagreb-wallpaper/"
