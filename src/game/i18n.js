@@ -6,6 +6,13 @@ export const I18N = {
         audio_none: 'Zvuk: sve isključeno',
         start_no_topic: 'Odaberi temu',
         start_no_topic_desk: 'Odaberi temu sa desne strane ➡️',
+        choose_topic: 'ODABERI TEMU',
+        choose_topic_sub_touch: 'U izborniku',
+        choose_topic_sub_desk: 'S desne strane',
+        aria_up: 'Gore',
+        aria_left: 'Lijevo',
+        aria_right: 'Desno',
+        aria_down: 'Dolje',
         start_ready_touch: 'Dodirni zaslon',
         start_ready_desk: 'Pritisni ENTER ↵',
         loading: 'Učitavanje...',
@@ -38,6 +45,11 @@ export const I18N = {
         save_no_session: 'Rezultat se ne može spremiti: sigurnosna sesija nije dostupna. Osvježite stranicu i pokušajte ponovno.',
         save_error: 'Greška pri spremanju rezultata: ',
         save_network_error: 'Mrežna greška pri spremanju rezultata.',
+        err_rate_limit: 'Previše zahtjeva. Pričekajte trenutak i pokušajte ponovno.',
+        err_security: 'Sigurnosna provjera nije uspjela. Osvježite stranicu i pokušajte ponovno.',
+        err_bad_request: 'Neispravan zahtjev.',
+        err_rejected: 'Rezultat nije prihvaćen.',
+        err_server: 'Greška na serveru. Pokušajte ponovno kasnije.',
 
         // HTML
         title: 'Tegoba Vještine — Edukativni Snake',
@@ -110,6 +122,13 @@ export const I18N = {
         audio_none: 'Sound: all off',
         start_no_topic: 'Pick a topic',
         start_no_topic_desk: 'Pick a topic from the right ➡️',
+        choose_topic: 'PICK A TOPIC',
+        choose_topic_sub_touch: 'In the menu',
+        choose_topic_sub_desk: 'On the right',
+        aria_up: 'Up',
+        aria_left: 'Left',
+        aria_right: 'Right',
+        aria_down: 'Down',
         start_ready_touch: 'Tap the screen',
         start_ready_desk: 'Press ENTER ↵',
         loading: 'Loading...',
@@ -142,6 +161,11 @@ export const I18N = {
         save_no_session: 'Score cannot be saved: security session unavailable. Refresh the page and try again.',
         save_error: 'Error saving score: ',
         save_network_error: 'Network error while saving score.',
+        err_rate_limit: 'Too many requests. Please wait a moment and try again.',
+        err_security: 'Security check failed. Refresh the page and try again.',
+        err_bad_request: 'Invalid request.',
+        err_rejected: 'Score not accepted.',
+        err_server: 'Server error. Please try again later.',
 
         // HTML
         title: 'Tegoba Vještine — Educational Snake',
@@ -278,6 +302,7 @@ export function setLang(lang) {
         try { localStorage.setItem('lang', lang); } catch (_) {}
         document.documentElement.lang = lang;
         applyI18n();
+        applyPageMeta();
         // Allow scripts to react to language change (like refreshing questions)
         window.dispatchEvent(new CustomEvent('languagechanged', { detail: { lang } }));
     }
@@ -289,6 +314,14 @@ export function t(key) {
         return I18N[lang][key];
     }
     return key;
+}
+
+// Tab title and description of the game page (index.html only; it alone has these keys' tags).
+export function applyPageMeta() {
+    if (!document.getElementById('gameCanvas')) return;
+    document.title = t('title');
+    const desc = document.querySelector('meta[name="description"]');
+    if (desc) desc.setAttribute('content', t('meta_desc'));
 }
 
 export function applyI18n() {
