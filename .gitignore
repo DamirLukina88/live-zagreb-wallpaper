@@ -14,3 +14,8 @@ bench/latest.json
 bench/latest.md
 bench/gpu-latest.md
 bench/shots/
+
+# Local only: the side-art kit (317 MB of renders and Gemini inputs) and Claude's local
+# config with Plasma settings backups
+extension-kit/
+.claude/
