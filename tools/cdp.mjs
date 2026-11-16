@@ -60,7 +60,9 @@ export async function launch() {
         '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
         ...(process.env.CI ? ['--no-sandbox'] : []), 'about:blank'], { stdio: 'ignore' });
     const portFile = path.join(profile, 'DevToolsActivePort');
-    for (let i = 0; i < 100 && !fs.existsSync(portFile); i++) await sleep(100);
+    // A cold start on a CI runner can take well over ten seconds
+    for (let i = 0; i < 900 && !fs.existsSync(portFile); i++) await sleep(100);
+    if (!fs.existsSync(portFile)) { proc.kill(); throw new Error('Chromium did not start within 90 s'); }
     const port = Number(fs.readFileSync(portFile, 'utf8').split('\n')[0]);
     return { port, stop() { proc.kill(); try { fs.rmSync(profile, { recursive: true, force: true }); } catch {} } };
 }
