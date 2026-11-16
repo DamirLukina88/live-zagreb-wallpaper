@@ -14,6 +14,7 @@ Kirigami.FormLayout {
     property string cfg_PauseRule
     property alias cfg_HeightOffset: offsetSpin.value
     property alias cfg_Bundled: bundledCheck.checked
+    property alias cfg_FrameRate: fpsSpin.value
 
     QQC2.TextField {
         id: cityField
@@ -38,6 +39,24 @@ Kirigami.FormLayout {
         id: sharpCheck
         Kirigami.FormData.label: "Kvaliteta / Quality:"
         text: "Oštra slika (Sharp full-res, više CPU/baterije)"
+    }
+
+    QQC2.SpinBox {
+        id: fpsSpin
+        Kirigami.FormData.label: "Sličice/s za kišu i snijeg / Frame rate in rain & snow:"
+        from: 5
+        to: 30
+        stepSize: 5
+        editable: true
+        textFromValue: function (v) { return v + " fps"; }
+        valueFromText: function (t) { return parseInt(t, 10) || 15; }
+    }
+
+    QQC2.Label {
+        Layout.maximumWidth: Kirigami.Units.gridUnit * 24
+        wrapMode: Text.WordWrap
+        font: Kirigami.Theme.smallFont
+        text: "Bez padalina slika miruje i osvježava se jednom u minuti (sunce, nebo, svjetla) radi grafike i baterije. Ovo vrijedi samo dok pada kiša, snijeg, tuča ili grmi. / Without precipitation the picture stays still and is redrawn once a minute (sun, sky, lights) to save GPU and battery. This applies only while rain, snow, hail or a storm is falling."
     }
 
     Kirigami.Separator {
@@ -65,7 +84,7 @@ Kirigami.FormLayout {
         textRole: "text"
         valueRole: "value"
         model: {
-            var m = [{ text: "Automatski (najveći) / Automatic (largest)", value: "" }];
+            var m = [{ text: "Automatski (glavni zaslon) / Automatic (main display)", value: "" }];
             var s = Qt.application.screens;
             for (var i = 0; i < s.length; ++i) {
                 m.push({ text: s[i].name + " (" + s[i].width + "×" + s[i].height + ")", value: s[i].name });

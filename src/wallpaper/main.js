@@ -12,6 +12,7 @@ function applyScale() {
     globalThis.__WP_SCALE__ = settings.sharp ? Math.min(dpr, 2) : 0.5;
 }
 applyScale();
+globalThis.__WP_FPS__ = settings.fps;
 
 const canvas = document.getElementById('weather-canvas');
 const overlay = document.getElementById('weather-overlay');
@@ -68,7 +69,7 @@ function spanConfig() {
         const dh = Math.max(...detected.map(s => s.y + s.h)) - minY;
         const kx = w / dw, ky = h / dh;
         const byLeft = [...detected].sort((a, b) => a.x - b.x || a.y - b.y);
-        // sceneDisplay 0 = automatic: the primary display (else the largest)
+        // sceneDisplay 0 = automatic: the primary display (else the largest, if none is marked primary)
         const pick = settings.slot >= 1 && settings.slot <= byLeft.length ? byLeft[settings.slot - 1]
             : detected.find(s => s.primary) || [...detected].sort((a, b) => b.w * b.h - a.w * a.h)[0];
         const scene = { x: (pick.x - minX) * kx, y: (pick.y - minY) * ky, w: pick.w * kx, h: pick.h * ky };
@@ -221,4 +222,5 @@ onSettingsChange((s, changed) => {
     if (changed.includes('city')) { retries = 0; refresh(); }
     if (changed.includes('sharp')) { applyScale(); lastSpanKey = ''; window.dispatchEvent(new Event('resize')); }
     if (changed.includes('layout')) applyLayout();
+    if (changed.includes('fps')) globalThis.__WP_FPS__ = s.fps;
 });

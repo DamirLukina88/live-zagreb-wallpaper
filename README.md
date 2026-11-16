@@ -61,8 +61,9 @@ To enable:
    - **Grad / City**: (e.g. `Zagreb`, `Split`, `Vienna`, `Tokyo`)
    - **Jezik / Language**: `Hrvatski` or `English`
    - **Kvaliteta / Quality**: Check *Sharp* for native full-resolution rendering.
+   - **Sličice/s za kišu i snijeg / Frame rate in rain & snow**: battery first. Every frame makes Plasma repaint the whole display, so in clear or cloudy weather the picture is **still**: the clouds stop and it is redrawn once a minute so the sun, moon, sky and night lights follow the clock. Only while rain, snow, hail or a storm is falling, or during the fade to new weather, does it run at this rate (15 fps by default, up to 30). *Sharp* on a scaled 4K display is the other big cost: leave it off on laptops.
    - **Raspored / Layout**: *Clone* or *Span*. For Span, choose it on **every** display (Plasma keeps settings per display). Each display's position, size and orientation are read automatically and follow screen changes.
-   - **Zaslon sa scenom / Scene display**: which display carries the terrace and weather card in Span; *Automatic* picks the largest.
+   - **Zaslon sa scenom / Scene display**: which display carries the terrace and weather card in Span; *Automatic* picks the main (primary) display, the one marked as main in System Settings → Display Configuration.
    - **Poravnanje visine / Height alignment**: on the side displays, shift the picture up (+) or down (−) in pixels until the railing meets the scene display's at the same height on your desk (monitors of different sizes and scaling rarely line up exactly from Plasma's arrangement alone).
    - **Pauza / Pause**: pause when *this* display is covered, or when *any* display is.
    - **Izvor / Source**: *Bundled copy* uses the files inside the plugin instead of the online page (offline, or to try a local build).

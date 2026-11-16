@@ -26,6 +26,7 @@ function readHash() {
         city: p.get('city') || null,
         lang: p.get('lang') || null,
         sharp: p.has('sharp') ? p.get('sharp') === '1' || p.get('sharp') === 'true' : null,
+        fps: num(p.get('fps')),
         clock: p.get('clock') || null,
         wx: p.has('wx') ? parseInt(p.get('wx'), 10) : null,
         season: p.get('season') || null,
@@ -49,9 +50,15 @@ function readStored() {
 // Geometry is not stored: it belongs to the display this page is on, which the host sends each time
 function store(s) {
     try {
-        localStorage.setItem('wp_settings', JSON.stringify({ city: s.city, lang: s.lang, sharp: s.sharp, layout: s.layout, slots: s.slots, slot: s.slot }));
+        localStorage.setItem('wp_settings', JSON.stringify({ city: s.city, lang: s.lang, sharp: s.sharp, fps: s.fps, layout: s.layout, slots: s.slots, slot: s.slot }));
     } catch {}
 }
+// Frames per second while precipitation moves (15 by default); otherwise the picture is still (zagreb-bg redraws it once a minute)
+export const DEFAULT_FPS = 15;
+const clampFps = v => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) && n > 0 ? Math.max(5, Math.min(30, n)) : DEFAULT_FPS;
+};
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 const listeners = [];
@@ -82,6 +89,13 @@ export function updateSettings(next, immediate = false) {
     if (next.sharp !== undefined && next.sharp !== settings.sharp) {
         settings.sharp = !!next.sharp;
         changed.push('sharp');
+    }
+    if (next.fps !== undefined && next.fps !== null) {
+        const fps = clampFps(next.fps);
+        if (fps !== settings.fps) {
+            settings.fps = fps;
+            changed.push('fps');
+        }
     }
     if (next.layout !== undefined) {
         const layout = next.layout === 'span' ? 'span' : 'clone';
@@ -123,6 +137,7 @@ export const settings = {
     city: fromHash.city || stored.city || 'Zagreb',
     lang: fromHash.lang || stored.lang || 'hr',
     sharp: fromHash.sharp !== null ? fromHash.sharp : stored.sharp ?? false,
+    fps: clampFps(fromHash.fps ?? stored.fps ?? DEFAULT_FPS),
     clock: fromHash.clock ? new Date(fromHash.clock) : null,
     wx: fromHash.wx !== null && !isNaN(fromHash.wx) ? fromHash.wx : null,
     season: fromHash.season || null,
@@ -137,7 +152,7 @@ export const settings = {
 window.wallpaperSettings = function (s) {
     if (!s || typeof s !== 'object') return;
     updateSettings({
-        city: s.city, lang: s.lang, sharp: s.sharp,
+        city: s.city, lang: s.lang, sharp: s.sharp, fps: s.fps,
         layout: s.layout, view: s.view, desk: s.desk, scene: s.scene
     });
 };
@@ -168,6 +183,9 @@ window.livelyPropertyListener = function (name, value) {
             break;
         case 'sharp':
             updateSettings({ sharp: !!value }, true);
+            break;
+        case 'fps':
+            updateSettings({ fps: value }, true);
             break;
         case 'layout': // dropdown: 0 clone, 1 span
             updateSettings({ layout: value === 1 || value === 'span' ? 'span' : 'clone' }, true);

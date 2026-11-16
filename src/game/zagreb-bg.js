@@ -20,6 +20,19 @@ import { ZAGREB_LIGHTS } from './zagreb-lights.js';
 import { codeToWx } from './weather-bg.js';
 
 const FRAME_MS = 1000 / 30;
+// Wallpaper: battery first. Every frame makes the desktop compositor repaint the whole display,
+// which is most of the GPU cost. The host page sets globalThis.__WP_FPS__: frames per second while
+// something animates (rain, snow, hail, a storm, the fade to new weather). Otherwise the picture is
+// still: clouds stop, and it is redrawn only every globalThis.__WP_IDLE_MS__ (default one minute)
+// so the sun, sky and night lights follow the clock. Without __WP_FPS__ (the game) every frame is
+// FRAME_MS and the clouds drift as before.
+function wpRates() {
+    const g = typeof globalThis !== 'undefined' ? globalThis : {};
+    const motion = typeof g.__WP_FPS__ === 'number' && g.__WP_FPS__ > 0 ? Math.min(g.__WP_FPS__, 30) : 0;
+    if (!motion) return null;
+    const idle = typeof g.__WP_IDLE_MS__ === 'number' && g.__WP_IDLE_MS__ >= 1000 ? g.__WP_IDLE_MS__ : 60000;
+    return { motion: 1000 / motion, idle };
+}
 // Scale factor for canvas backing store: native 1:1 on standard screens, and up to 2x
 // on high-DPI/mobile displays (retina/AMOLED) so the 1200x896 artwork renders crisp.
 // Wallpaper: the host page may set globalThis.__WP_SCALE__ (calm 0.5 / sharp) to override this.
@@ -1341,6 +1354,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         S.H = Math.max(1, Math.round(window.innerHeight * scale));
         canvas.width = S.W;
         canvas.height = S.H;
+        S.blank = true; // resizing clears the canvas: it needs a picture even while paused
         canvas.style.imageRendering = 'auto';
         ctx.imageSmoothingEnabled = true;
         if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
@@ -1461,7 +1475,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const wall = WORLD.span ? (performance.timeOrigin + performance.now()) / 1000 : 0;
         for (const c of S.clouds) {
             if (WORLD.span) {
-                c.x = (((c.x0 + 0.3 + wall * speed(c)) % 1.6) + 1.6) % 1.6 - 0.3;
+                if (!still()) c.x = (((c.x0 + 0.3 + wall * speed(c)) % 1.6) + 1.6) % 1.6 - 0.3;
             } else {
                 c.x += dt * speed(c);
                 if (c.x > 1.3) c.x = -0.3;
@@ -1564,6 +1578,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         }
         // Nothing is worth showing until the painting itself has arrived
         if (imgLoaded) S.drawn = true;
+        S.blank = !imgLoaded;
         if (S.shown) show();
     }
 
@@ -1578,26 +1593,64 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     const reduced = () => !!(mq && mq.matches);
     const isPlaying = () => document.body.classList.contains('playing-mode');
 
+    // Something on screen moves every frame (not just the slow sky): precipitation, lightning, a fade
+    const moving = () => {
+        const wx = S.wx;
+        return wx.rain > 0 || wx.snow > 0 || wx.hail > 0 || wx.thunder || S.fade > 0;
+    };
+    const still = () => !!wpRates() && !moving();
+    function frameMs() {
+        const r = wpRates();
+        return r ? (moving() ? r.motion : r.idle) : FRAME_MS;
+    }
+
+    let sleepTimer = null;
+    function stopTimers() {
+        if (S.anim) cancelAnimationFrame(S.anim);
+        S.anim = null;
+        clearTimeout(sleepTimer);
+        sleepTimer = null;
+    }
+    // Long gaps (the wallpaper's idle rate) sleep on a timer instead of waking every display frame
+    function schedule() {
+        const wait = S.last + frameMs() - performance.now();
+        if (wait > 50) {
+            sleepTimer = setTimeout(() => {
+                sleepTimer = null;
+                S.anim = requestAnimationFrame(loop);
+            }, wait - 20);
+        } else {
+            S.anim = requestAnimationFrame(loop);
+        }
+    }
+
     function loop(now) {
         S.anim = null;
-        if (S.dead || !S.enabled || S.paused || document.hidden) return;
+        if (S.dead || !S.enabled) return;
+        // Paused or hidden: draw nothing more, but never leave a cleared (empty or half) canvas
+        if (S.paused || document.hidden) {
+            if (S.blank) frame(0, false);
+            return;
+        }
         if (reduced()) {
             frame(0, false); // one still picture
             return;
         }
-        S.anim = requestAnimationFrame(loop);
+        const ms = frameMs();
         const elapsed = now - S.last;
-        if (elapsed < FRAME_MS - 1) return;
-        S.last = now;
-        frame(Math.min(elapsed, 100) / 1000, isPlaying());
+        if (elapsed >= ms - 1) {
+            S.last = now;
+            // A still wallpaper frame lets no time pass: the clouds and shimmer keep their place
+            frame(still() || !Number.isFinite(elapsed) ? 0 : Math.min(elapsed, 100) / 1000, isPlaying());
+        }
+        schedule();
     }
 
     function kick() {
-        if (S.anim) cancelAnimationFrame(S.anim);
-        S.anim = null;
+        stopTimers();
         if (S.dead) return;
         const now = performance.now();
-        S.last = now - FRAME_MS;
+        S.last = -Infinity; // draw now, whatever the rate (the idle wallpaper waits a minute)
         loop(now);
     }
 
@@ -1610,6 +1663,12 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
     return {
         setWeather(code, isDay, windKmh) {
+            // The same weather again (the minute tick): just redraw, keeping the clouds where they are
+            const next = wxFor(code, isDay, windKmh);
+            if (S.wx && next.key === S.wx.key) {
+                kick();
+                return;
+            }
             // Keep the current picture to fade from, unless nothing has been shown yet
             if (S.drawn && canvas.classList.contains('wx-ready') && !reduced()) {
                 const snap = document.createElement('canvas');
@@ -1618,7 +1677,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 S.prev = snap;
                 S.fade = 1;
             }
-            S.wx = wxFor(code, isDay, windKmh);
+            S.wx = next;
             seedClouds();
             kick();
         },
@@ -1656,8 +1715,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // Stop for good and let another background use the canvases
         dispose() {
             S.dead = true;
-            if (S.anim) cancelAnimationFrame(S.anim);
-            S.anim = null;
+            stopTimers();
             window.removeEventListener('resize', onResize);
             document.removeEventListener('visibilitychange', kick);
             if (mq && mq.removeEventListener) mq.removeEventListener('change', kick);

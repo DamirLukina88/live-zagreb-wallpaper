@@ -7,6 +7,7 @@ import org.kde.taskmanager as TaskManager
 WallpaperItem {
     id: root
 
+    readonly property int fps: Math.max(5, Math.min(30, Number(root.configuration.FrameRate) || 15))
     readonly property string onlineUrl: "https://damirlukina88.github.io/live-zagreb-wallpaper/"
     readonly property string bundledUrl: Qt.resolvedUrl("../web/index.html")
 
@@ -28,16 +29,17 @@ WallpaperItem {
         }
         var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         var want = root.configuration.SceneDisplay || "";
-        var scene = null, largest = null;
+        var scene = null, primary = null;
         for (var i = 0; i < screens.length; ++i) {
             var s = screens[i];
             var r = { x: s.virtualX, y: s.virtualY, w: s.width, h: s.height };
             minX = Math.min(minX, r.x); minY = Math.min(minY, r.y);
             maxX = Math.max(maxX, r.x + r.w); maxY = Math.max(maxY, r.y + r.h);
             if (want !== "" && s.name === want) scene = r;
-            if (!largest || r.w * r.h > largest.w * largest.h || (r.w * r.h === largest.w * largest.h && r.x < largest.x)) largest = r;
+            // Qt lists the primary display (KDE's "main display", the top one in Display Configuration) first
+            if (i === 0) primary = r;
         }
-        if (!scene) scene = largest;
+        if (!scene) scene = primary;
         // The scene display is the reference: alignment only moves the displays beside it
         if (scene.x === Screen.virtualX && scene.y === Screen.virtualY) mine.y = Screen.virtualY;
         var shift = function (r) { return { x: r.x - minX, y: r.y - minY, w: r.w, h: r.h }; };
@@ -55,6 +57,7 @@ WallpaperItem {
             city: root.configuration.City || "Zagreb",
             lang: root.configuration.Language || "hr",
             sharp: !!root.configuration.Sharp,
+            fps: root.fps,
             layout: info.layout
         };
         if (info.layout === "span") {
@@ -69,7 +72,7 @@ WallpaperItem {
         var c = root.configuration.City || "Zagreb";
         var l = root.configuration.Language || "hr";
         var s = root.configuration.Sharp ? "1" : "0";
-        var h = "city=" + encodeURIComponent(c) + "&lang=" + encodeURIComponent(l) + "&sharp=" + s;
+        var h = "city=" + encodeURIComponent(c) + "&lang=" + encodeURIComponent(l) + "&sharp=" + s + "&fps=" + root.fps;
         var info = root.layoutInfo;
         h += "&layout=" + info.layout;
         if (info.layout === "span") {
