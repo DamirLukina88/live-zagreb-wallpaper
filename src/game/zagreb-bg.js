@@ -582,7 +582,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         return img.complete && img.naturalWidth > 0 ? img : sceneryImg;
     }
 
-    let rainbowActiveUntil = 0; // performance.now() time when the current rainbow ends
+    let rainbowActiveUntil = 0; // wall-clock time (Date.now()) when the current rainbow ends
     let lastHadRain = false;
 
     // Seeded starfield for night sky. 90 on one screen; a span uses more of the same sequence so
@@ -1709,11 +1709,14 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             // Rainbow: possible only with the sun up but lower than 42 degrees, and never in rain,
             // snow, hail, fog, heavy cloud or at night. When daytime rain clears there is a 20%
             // chance of one, lasting up to an hour.
-            const now = performance.now();
+            // Wall-clock time: in a span every display runs its own page, and they must agree
+            const now = Date.now();
             const possible = L.alt > 0.5 && L.alt < 42 && !(wx.snow > 0 || wx.hail > 0 || wx.fog > 0.4 || wx.rain > 0.05 || wx.cloud > 0.55);
             let targetRainbow = 0;
             if (!possible) rainbowActiveUntil = 0;
-            else if (lastHadRain && Math.random() < 0.20) rainbowActiveUntil = now + 3600 * 1000;
+            // Wallpaper: the 20 % chance comes from the hour, not Math.random(), so all displays of a
+            // span decide alike and the bow does not stop at a display's edge
+            else if (lastHadRain && (wallpaper() ? hash01(Math.floor(now / 3600000) * 0.731 + 0.17) : Math.random()) < 0.20) rainbowActiveUntil = now + 3600 * 1000;
             if (possible && now < rainbowActiveUntil) targetRainbow = 0.85 * (0.5 + 0.5 * L.cs);
             lastHadRain = wx.rain > 0.15;
             // Wallpaper: the sky is redrawn once a minute, often with no time passing (dt 0), so the
@@ -2216,7 +2219,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const cached = wallpaper() && !playing;
         if (cached) {
             // The clock to the whole minute, so displays redrawn a moment apart show the same sky
-            const wall = Math.floor((performance.timeOrigin + performance.now()) / 60000) * 60;
+            // (wall-clock time, as the page's minute tick uses: the page's own clock stops while
+            // the computer sleeps, and would fall out of step with the tick and the other displays)
+            const wall = Math.floor(Date.now() / 60000) * 60;
             const L = computeLight(fw);
             const key = [L.key, wall, S.W, S.H, sceneryHidden, imgLoaded].join('|');
             if (BG.key !== key || !BG.out) {
@@ -2236,7 +2241,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         } else {
             if (canvas.style.filter !== LOOK_CSS) canvas.style.filter = LOOK_CSS;
             zagrebStyle.sky(fw);
-            placeClouds(fw, WORLD.span ? (performance.timeOrigin + performance.now()) / 1000 : 0, dt);
+            placeClouds(fw, WORLD.span ? Date.now() / 1000 : 0, dt);
             if (wx.cloud >= 0.9 || wx.fog > 0.4) drawSheets(fw);
             else for (const c of S.clouds) zagrebStyle.cloud(fw, c);
             drawExtension(fw);

@@ -10,8 +10,15 @@ function fetchJson(url) {
     return fetch(url, { signal: ctl.signal }).finally(() => clearTimeout(timer));
 }
 
+// The name to search for: "Zagreb, HR", "Split, Croatia" or "Zürich (CH)" searches for the place
+// alone (the search takes a plain name), without characters it cannot use
+export function cityName(city) {
+    return String(city || 'Zagreb').split(',')[0].replace(/\([^)]*\)/g, ' ').trim().substring(0, 50)
+        .replace(/[^\p{L}\p{N}\s\-]/gu, '').replace(/\s+/g, ' ').trim() || 'Zagreb';
+}
+
 async function geocode(city) {
-    const name = (city || 'Zagreb').trim().substring(0, 50).replace(/[^\p{L}\p{N}\s\-]/gu, '').trim() || 'Zagreb';
+    const name = cityName(city);
     const key = `wp_geo_${name.toLowerCase()}`;
     try {
         const s = localStorage.getItem(key);
@@ -104,16 +111,23 @@ export async function fetchWeather(city = 'Zagreb') {
             sunrise: days(daily.sunrise),
             sunset: days(daily.sunset)
         },
-        fetchedAt: Date.now()
+        fetchedAt: Date.now(),
+        query: cityName(city).toLowerCase() // which setting this answer belongs to (see cachedWeather)
     };
     try { localStorage.setItem('wp_last_weather', JSON.stringify(data)); } catch {}
     return data;
 }
 
-export function cachedWeather() {
+// The last answer, if it is for this city. Every page of the site shares one store, so another
+// display (or a city set before) may have left another place's weather there.
+export function cachedWeather(city) {
     try {
         const s = localStorage.getItem('wp_last_weather');
-        if (s) return JSON.parse(s);
+        if (!s) return null;
+        const w = JSON.parse(s);
+        const want = cityName(city).toLowerCase();
+        // answers saved before the query was recorded carry only the place's own name
+        return (w.query || String(w.city || '').toLowerCase()) === want ? w : null;
     } catch {}
     return null;
 }

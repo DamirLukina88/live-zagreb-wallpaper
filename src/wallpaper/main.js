@@ -245,7 +245,7 @@ function panelData(w, code, day, now) {
     };
 }
 
-apply(cachedWeather() || {
+apply(cachedWeather(settings.city) || {
     city: settings.city,
     country: 'HR',
     latitude: 45.815,
@@ -262,16 +262,22 @@ apply(cachedWeather() || {
 const RETRY_MS = [60 * 1000, 120 * 1000, 300 * 1000];
 let retries = 0;
 let retryTimer = null;
+let fetchSeq = 0;
 
 async function refresh() {
     clearTimeout(retryTimer);
     retryTimer = null;
     lastFetch = Date.now();
+    // Only the newest request counts: after a change of city, an older answer still on its way
+    // (it can take up to 15 s) must not put the previous city's weather back
+    const seq = ++fetchSeq;
     try {
         const w = await fetchWeather(settings.city);
+        if (seq !== fetchSeq) return;
         retries = 0;
         apply(w);
     } catch (err) {
+        if (seq !== fetchSeq) return;
         console.warn('Weather fetch error:', err);
         if (err && err.message === 'City not found') {
             const cond = document.getElementById('wp-cond');
