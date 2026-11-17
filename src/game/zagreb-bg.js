@@ -1169,7 +1169,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         x.fillRect(0, 0, c.width, c.height);
         return c;
     }
-    const CLOUD_TINT = { body: ['body', 'cloudLit'], shade: ['shade', 'cloudShade'], under: ['under', 'glow'], sheet: ['body', 'sheet'] };
+    const CLOUD_TINT = { body: ['body', 'cloudLit'], shade: ['shade', 'cloudShade'], under: ['under', 'glow'], sheet: ['body', 'sheet'], haze: ['body', 'hor'] };
     const cloudCache = new Map(); // "variant|kind" -> { key, canvas }
     function cloudSprite(L, variant, kind) {
         const [mask, colour] = CLOUD_TINT[kind];
@@ -1701,6 +1701,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
             ctx.save();
             if (wx.cloud >= 0.9 || wx.fog > 0.4) {
+                if (c.far) { ctx.restore(); return; }
                 const w = W * (0.8 + 0.5 * c.s), h = w * 0.24;
                 // Snow comes from an even, pale sheet; rain a little more broken; storms heavy
                 ctx.globalAlpha = (wx.thunder ? 0.34 : (wx.snow > 0 || wx.fog > 0.4) ? 0.04 : wx.rain > 0 ? 0.11 : 0.12) * (0.55 + 0.45 * depth);
@@ -1711,18 +1712,36 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 return;
             }
             // The same shape is mirrored and made a little flatter or taller from the cloud's seed
-            const w = c.s * Math.min(W * 0.34, H * 0.46) * (0.4 + 0.6 * depth);
-            const h = w * 0.5 * (0.86 + 0.3 * ((c.seed % 53) / 53));
+            const persp = wpFrameMs() > 0;
             const skyH = L.horizonY - f.RY;
-            const y = f.RY + skyH * (0.80 - 0.72 * depth) + ((c.seed % 97) / 97 - 0.5) * skyH * 0.08 - h / 2;
+            let w, h, y;
+            if (persp) {
+                // Perspective: near clouds are large and high, far ones small, flat and low,
+                // crowding just above the hills
+                // near clouds keep their size; far ones shrink but stretch wide and flat
+                const size = depth >= 0.45 ? 0.74 + 0.6 * (depth - 0.45) / 0.55 : 0.16 + 0.58 * Math.pow(depth / 0.45, 1.2);
+                w = c.s * Math.min(W * 0.34, H * 0.46) * size * (1 + 0.9 * clamp((0.5 - depth) / 0.5));
+                h = w * 0.5 * (0.32 + 0.68 * Math.min(1, depth / 0.6)) * (0.86 + 0.3 * ((c.seed % 53) / 53));
+                y = L.horizonY - skyH * (0.03 + 0.8 * Math.pow(depth, 1.35)) + ((c.seed % 97) / 97 - 0.5) * skyH * 0.05 * depth - h * 0.6;
+            } else {
+                w = c.s * Math.min(W * 0.34, H * 0.46) * (0.4 + 0.6 * depth);
+                h = w * 0.5 * (0.86 + 0.3 * ((c.seed % 53) / 53));
+                y = f.RY + skyH * (0.80 - 0.72 * depth) + ((c.seed % 97) / 97 - 0.5) * skyH * 0.08 - h / 2;
+            }
             ctx.translate(c.px, 0);
             if ((c.seed >> 3) & 1) ctx.scale(-1, 1);
             const x = -w / 2;
-            const a = 0.5 + 0.42 * depth;
+            const a = persp ? 0.62 + 0.33 * depth : 0.5 + 0.42 * depth;
             ctx.globalAlpha = a;
             ctx.drawImage(cloudSprite(L, variant, 'body'), x, y, w, h);
-            ctx.globalAlpha = a * 0.6;
+            // Far clouds show less of their own shadow (air flattens contrast)
+            ctx.globalAlpha = a * 0.6 * (persp ? 0.35 + 0.65 * depth : 1);
             ctx.drawImage(cloudSprite(L, variant, 'shade'), x, y, w, h);
+            if (persp && depth < 0.85) {
+                // ...and take on the colour of the air near the horizon (at sunset, its glow)
+                ctx.globalAlpha = a * 0.75 * Math.pow(1 - depth, 1.4);
+                ctx.drawImage(cloudSprite(L, variant, 'haze'), x, y, w, h);
+            }
             // Low sun: the undersides nearest the sun catch its colour
             const warm = a * L.lowSun * L.cs * (0.35 + 0.65 * clamp(1 - Math.abs(c.px - L.sunX) / (W * 0.7)));
             if (warm > 0.02) {
@@ -1889,6 +1908,17 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         S.clouds = [];
         for (let i = 0; i < n; i++) {
             S.clouds.push({ x: r() * 1.5 - 0.25, y: 0.05 + r() * 0.33, s: 0.7 + r() * 0.7, d: 0.45 + r() * 0.55, seed: Math.floor(r() * 1e6) });
+        }
+        // Wallpaper: clouds in the distance, so the sky has depth (the user's wish, 2026-11-17).
+        // Small, flat and hazy, crowding toward the horizon; their number follows the cover. They
+        // are only drawn as separate clouds (an overcast sheet ignores them).
+        if (wpFrameMs() > 0) {
+            const r2 = rng(911);
+            const nf = S.wx.cloud < 0.05 ? 0 : Math.round(S.wx.cloud * 28 * widen);
+            for (let i = 0; i < nf; i++) {
+                const d = 0.04 + 0.4 * Math.pow(r2(), 1.6); // most of them far away
+                S.clouds.push({ x: r2() * 1.5 - 0.25, y: 0, s: 0.7 + r2() * 0.7, d, seed: Math.floor(r2() * 1e6), far: true });
+            }
         }
         for (const c of S.clouds) c.x0 = c.x;
         S.clouds.sort((a, b) => a.d - b.d);
