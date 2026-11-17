@@ -789,11 +789,25 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const t = new Date(d.getTime() + off);
         return t.getUTCHours() + t.getUTCMinutes() / 60 + t.getUTCSeconds() / 3600;
     }
-    function windowOn(i, h) {
+    // Advent in Zagreb: from the first Advent Sunday (the Sunday from 27 November to 3 December)
+    // to 6 January, in the weather city's own date. ENV.advent true/false forces it (tests).
+    function adventNow() {
+        if (!wallpaper()) return false;
+        if (ENV.advent === true || ENV.advent === false) return ENV.advent;
+        const d = env().date;
+        const off = typeof ENV.utcOffsetSeconds === 'number' ? ENV.utcOffsetSeconds * 1000 : -d.getTimezoneOffset() * 60000;
+        const t = new Date(d.getTime() + off);
+        const y = t.getUTCFullYear(), m = t.getUTCMonth(), day = t.getUTCDate();
+        if (m === 0) return day <= 6;
+        const dec3 = new Date(Date.UTC(y, 11, 3));
+        const first = Date.UTC(y, 11, 3 - dec3.getUTCDay()); // the Sunday on or before 3 December
+        return Date.UTC(y, m, day) >= first;
+    }
+    function windowOn(i, h, advent) {
         if (!wallpaper()) return 1;
         const h24 = h < 12 ? h + 24 : h; // evening hours run on past midnight: 01:00 = 25
         if (hash01(i * 5.1 + 0.3) < 0.1) return 1; // night owls
-        const bedtime = 22 + 3 * hash01(i * 3.7 + 1.1);
+        const bedtime = 22 + 3 * hash01(i * 3.7 + 1.1) + (advent ? 1 : 0); // Advent evenings run later
         const asleep = clamp((h24 - bedtime) * 60); // one-minute fade
         if (h < 12 && hash01(i * 2.9 + 7.7) < 0.4) {
             const wake = 5.5 + hash01(i * 1.3 + 4.2);
@@ -805,6 +819,67 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         if (!wallpaper()) return 1;
         const h24 = h < 12 ? h + 24 : h;
         return 1 - clamp((h24 - 23.75) / 0.25);
+    }
+
+    // Advent string lights: warm-white bulbs with a few coloured ones, hanging in shallow arcs
+    // from the top rail between the posts (painting pixels: posts about every 87 px from x 10,
+    // top rail at row 600), reflected in the wet floor like the lamps.
+    const ADVENT_COLOURS = ['255,70,60', '70,210,110', '90,140,255', '255,200,70'];
+    const GARLAND = (() => {
+        const bulbs = [];
+        for (let p0 = 10; p0 < 1200; p0 += 87) {
+            const p1 = Math.min(1199, p0 + 87);
+            const n = 9;
+            for (let j = 1; j < n; j++) {
+                const u = j / n;
+                const id = bulbs.length;
+                bulbs.push({
+                    x: (p0 + (p1 - p0) * u) / 1200,
+                    y: (600 + 2 + 7 * Math.sin(Math.PI * u)) / 896, // sags about 7 px in the middle
+                    col: hash01(id * 3.17 + 0.5) < 0.22 ? ADVENT_COLOURS[id % ADVENT_COLOURS.length] : '255,214,150',
+                    ph: hash01(id * 1.93 + 4.1) * 6.2832
+                });
+            }
+        }
+        return bulbs;
+    })();
+    function drawGarland(f, geom, k) {
+        const { ctx, t, wx, W, H } = f;
+        const sc = geom.drawW / 1200;
+        const r = Math.max(0.8, 1.15 * sc);
+        const floorY = geom.drawY + FLOOR_TOP * geom.drawH;
+        const wet = wx.rain > 0.15;
+        const snowed = LIGHT ? LIGHT.lying : 0;
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        for (const b of GARLAND) {
+            const x = geom.drawX + b.x * geom.drawW, y = geom.drawY + b.y * geom.drawH;
+            if (x < -10 || x > W + 10) continue;
+            const a = clamp(k * (0.75 + 0.25 * Math.sin(t * 1.3 + b.ph)));
+            const glow = r * 3.4;
+            const g = ctx.createRadialGradient(x, y, 0, x, y, glow);
+            g.addColorStop(0, `rgba(${b.col},${(a * 0.9).toFixed(3)})`);
+            g.addColorStop(0.3, `rgba(${b.col},${(a * 0.35).toFixed(3)})`);
+            g.addColorStop(1, `rgba(${b.col},0)`);
+            ctx.fillStyle = g;
+            ctx.fillRect(x - glow, y - glow, glow * 2, glow * 2);
+            // In the floor, mirrored about the near mirror line, dimmer and smeared
+            const ry = geom.drawY + (2 * MIRROR_NEAR - b.y) * geom.drawH;
+            const ra = a * (wet ? 0.22 : 0.3) * (1 - 0.9 * snowed);
+            if (ry > floorY && ry < H + 10 && ra > 0.01) {
+                const sw = r * 1.6, sh = r * (wet ? 4.5 : 3.4);
+                ctx.save();
+                ctx.translate(x, ry);
+                ctx.scale(1, sh / sw);
+                const rg = ctx.createRadialGradient(0, 0, 0, 0, 0, sw);
+                rg.addColorStop(0, `rgba(${b.col},${ra.toFixed(3)})`);
+                rg.addColorStop(1, `rgba(${b.col},0)`);
+                ctx.fillStyle = rg;
+                ctx.fillRect(-sw, -sw, sw * 2, sw * 2);
+                ctx.restore();
+            }
+        }
+        ctx.restore();
     }
 
     function drawLights(f, geom, k, list = ZAGREB_LIGHTS, part = 'all') {
@@ -819,6 +894,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const wet = wx.rain > 0.15 ? 1 : 0;
 
         const hours = localHours();
+        const advent = list === ZAGREB_LIGHTS && adventNow();
         const floodK = floodOn(hours);
         const flood = part === 'points' || floodK <= 0.01 ? null : floodLayer(list, geom);
         if (flood) {
@@ -843,11 +919,11 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             const x = geom.drawX + L.x * geom.drawW, y = geom.drawY + L.y * geom.drawH;
             if (x < -20 || x > W + 20 || y < -20 || y > H + 20) return;
             // About one window in eight stays dark, a different set each night
-            if (L.t === 'win' && hash01(i * 7.3 + tonight) < 0.12) return;
+            if (L.t === 'win' && !advent && hash01(i * 7.3 + tonight) < 0.12) return; // in Advent every window is lit
 
             const flick = 1 + Math.sin(t * (0.5 + hash01(i) * 1.2) + i * 1.7) * 0.07 + Math.sin(t * 0.23 + i) * 0.04;
             // Distant pinpoints twinkle through the air; nearer lights only breathe
-            const awake = L.t === 'win' ? windowOn(i, hours) : 1;
+            const awake = L.t === 'win' ? windowOn(i, hours, advent) : 1;
             if (awake <= 0.01) return;
             const a = clamp(k * awake * (L.t === 'far' ? 0.55 + 0.45 * Math.sin(t * (1.1 + hash01(i) * 1.6) + i * 3.1) : flick));
             const rw = Math.max(1.2, L.w * sc), rh = Math.max(1.2, L.h * sc);
@@ -886,6 +962,17 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             ctx.fillStyle = `rgba(${rgb},${(a * 0.92).toFixed(3)})`;
             if (L.t === 'win') {
                 ctx.fillRect(x - rw / 2, y - rh / 2, rw, rh);
+                if (advent && hash01(i * 4.3 + 2.2) < 0.35) {
+                    // A few coloured lights in the window or on the balcony beside it
+                    const tw = 0.6 + 0.4 * Math.sin(t * (0.8 + hash01(i * 9.1) * 1.4) + i);
+                    const col = ADVENT_COLOURS[Math.floor(hash01(i * 6.7 + 3.3) * ADVENT_COLOURS.length)];
+                    ctx.fillStyle = `rgba(${col},${(a * 0.8 * tw).toFixed(3)})`;
+                    const dx = (hash01(i * 2.1) < 0.5 ? -1 : 1) * rw * 1.2;
+                    ctx.beginPath();
+                    ctx.arc(x + dx, y + rh * 0.6, Math.max(0.9, rw * 0.35), 0, 6.2832);
+                    ctx.fill();
+                    ctx.fillStyle = `rgba(${rgb},${(a * 0.92).toFixed(3)})`;
+                }
             } else if (L.t === 'tower') {
                 // Arched opening: a rectangle with a rounded top
                 ctx.beginPath();
@@ -916,6 +1003,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 }
             }
         });
+        if (advent) drawGarland(f, geom, k);
     }
 
     function drawMoon(f, p, m) {
