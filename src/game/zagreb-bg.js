@@ -117,12 +117,14 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     function wxFor(code, isDay, windKmh) {
         const wx = codeToWx(code, isDay, windKmh);
         // Wallpaper: snow lies for as long as the weather service measures it on the ground, not
-        // only while it falls. 1 cm dusts the roofs and terrace, 8 cm covers them.
-        if (typeof ENV.snowDepthCm === 'number' && ENV.snowDepthCm > 0.2) {
-            const lying = Math.round(clamp(ENV.snowDepthCm / 8) * 20) / 20;
-            wx.snowCover = Math.max(wx.snowCover || 0, lying);
-        }
-        wx.key = code + '|' + (isDay ? 1 : 0) + '|' + wx.wind + '|' + (wx.snowCover || 0);
+        // only while it falls: a light dusting from about 1 cm, fully white from 5 cm (the user's
+        // choice, 2026-11-17). It is painted into the artwork itself (snowyArt), so it takes the
+        // hour's light like everything else. Without a measurement, falling snow settles a little.
+        const depth = ENV.snowDepthCm;
+        wx.lying = typeof depth === 'number'
+            ? (depth > 0.2 ? Math.round(clamp(depth / 5) * 20) / 20 : 0)
+            : (wx.snow > 0 ? Math.round(wx.snowCover * 0.6 * 20) / 20 : 0);
+        wx.key = code + '|' + (isDay ? 1 : 0) + '|' + wx.wind + '|' + wx.lying;
         return wx;
     }
 
@@ -218,7 +220,8 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const sm = seasonMix(e);
         const artA = seasonArt(sm.from), artB = sm.t > 0 ? seasonArt(sm.to) : artA;
         const season = sm.t > 0 ? `${sm.from}>${sm.to}@${sm.t.toFixed(3)}|${artB === sceneryImg}` : sm.from;
-        const art = sm.t > 0 ? blendedArt(artA, artB, sm.t) : artA;
+        const plain = sm.t > 0 ? blendedArt(artA, artB, sm.t) : artA;
+        const art = wx.lying > 0.02 ? snowyArt(plain, wx.lying, season) : plain;
         const key = [Math.round(alt * 10), wx.key, W, H, Math.floor(e.date.getTime() / 60000), season, artA === sceneryImg, ENV.tempC, WORLD.key].join('|');
         if (LIGHT && LIGHT.key === key) return LIGHT;
         const RH = WORLD.RH;
@@ -250,7 +253,10 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // Half-frozen terrace: with lying snow or ice, or when the air is at or below freezing.
         // 0 = wet, 1 = mostly ice.
         const cold = typeof ENV.tempC === 'number' ? clamp((1 - ENV.tempC) / 5) : 0;
-        L.frost = clamp(Math.max(L.snowCover * 0.9, cold));
+        L.lying = wx.lying || 0;
+        // Ice sheets only for frost and freezing rain: with snow on the ground or falling, none
+        const snowy = L.lying > 0.02 || wx.snow > 0;
+        L.frost = snowy ? 0 : clamp(Math.max(L.snowCover * 0.9, cold));
         // Fog, falling snow and rain hide the distance: how much the far town fades into the air
         L.haze = Math.max(wx.fog * 0.85, wx.snow * 0.5, wx.rain * 0.28);
 
@@ -385,6 +391,113 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         g.globalAlpha = t;
         g.drawImage(b, 0, 0, c.width, c.height);
         blendCache.key = key;
+        return c;
+    }
+    // Wallpaper: lying snow painted into the artwork (painting pixels, so it is the same on every
+    // display and lit by lightLayer like the rest). Subtle and natural, no white caps (the user's
+    // wish): the terrace floor goes from a patchy dusting with wet ground showing through to an
+    // even layer; the kerb and the top rail collect a little; roofs pale; tree crowns get sparse
+    // flecks. Rows are the painting's own (896 high): floor from 668, kerb top 649-662, top rail
+    // 598-601, town roofs 548-640 between the trees.
+    const snowCache = { key: '', canvas: null };
+    let snowNoise = null;
+    function snowField(W, H) {
+        if (snowNoise && snowNoise.W === W && snowNoise.H === H) return snowNoise;
+        const rnd = rng(31337);
+        const N = 128, lat = new Float32Array(N * N);
+        for (let i = 0; i < lat.length; i++) lat[i] = rnd();
+        const noise = (x, y) => {
+            const xi = Math.floor(x), yi = Math.floor(y), fx = x - xi, fy = y - yi;
+            const u = fx * fx * (3 - 2 * fx), w = fy * fy * (3 - 2 * fy);
+            const x0 = xi & 127, x1 = (xi + 1) & 127, y0 = (yi & 127) * N, y1 = ((yi + 1) & 127) * N;
+            const a = lat[y0 + x0], b = lat[y0 + x1], c = lat[y1 + x0], d = lat[y1 + x1];
+            return a + (b - a) * u + (c - a + (a - b + d - c) * u) * w;
+        };
+        const field = new Float32Array(W * H), fine = new Float32Array(W * H);
+        const floor = 668 / 896 * H, sx = W / 1200;
+        for (let y = 0; y < H; y++) {
+            // On the floor, patches grow toward the viewer (perspective): wide and flat far away
+            const depth = y >= floor ? (y - floor) / (H - floor) : 0;
+            const kx = 1 / ((26 + 60 * depth) * sx), ky = 1 / ((5 + 22 * depth) * sx);
+            for (let x = 0; x < W; x++) {
+                let v = 0, amp = 0.5, norm = 0, px = x * kx, py = y * ky;
+                for (let o = 0; o < 4; o++) {
+                    v += noise(px, py) * amp;
+                    norm += amp;
+                    px = px * 2.1 + 13.7;
+                    py = py * 2.1 + 5.3;
+                    amp *= 0.5;
+                }
+                field[y * W + x] = v / norm;
+                // Grain: snow is many small specks, a few pixels wide, larger toward the viewer
+                const gx = x / ((1.6 + 5 * depth) * sx), gy = y / ((0.9 + 3.2 * depth) * sx);
+                fine[y * W + x] = 0.6 * noise(gx + 57.1, gy + 11.3) + 0.4 * noise(gx * 2.3 + 3.7, gy * 2.3 + 91.9);
+            }
+        }
+        return (snowNoise = { W, H, field, fine });
+    }
+    function snowyArt(src, amount, seasonKey) {
+        const key = [seasonKey, src.src || 'blend', amount, src.naturalWidth || src.width].join('|');
+        if (snowCache.key === key) return snowCache.canvas;
+        const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
+        if (!W || !H) return src; // the painting is still loading
+        const c = snowCache.canvas || (snowCache.canvas = document.createElement('canvas'));
+        c.width = W;
+        c.height = H;
+        const g = c.getContext('2d');
+        g.drawImage(src, 0, 0, W, H);
+        const img = g.getImageData(0, 0, W, H), px = img.data;
+        const { field, fine } = snowField(W, H);
+        const k = H / 896, sx = W / 1200;
+        const floorY = 668 * k, kerb0 = 649 * k, kerb1 = 662 * k, rail0 = 598 * k, rail1 = 602 * k;
+        const town0 = 548 * k, town1 = 640 * k, townL = 300 * sx, townR = 1060 * sx;
+        const smooth = (a, b, v) => { const t = clamp((v - a) / (b - a)); return t * t * (3 - 2 * t); };
+        const SNOW = [234, 239, 246];
+        const a = amount;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                const i = (y * W + x) * 4;
+                if (px[i + 3] < 8) continue; // sky
+                const n = field[y * W + x], f = fine[y * W + x];
+                const r = px[i], gg = px[i + 1], b = px[i + 2];
+                const lum = 0.3 * r + 0.59 * gg + 0.11 * b;
+                let cover = 0, tone = 1;
+                if (y >= floorY) {
+                    // A fine grain of specks that grows denser with depth; thinner and thicker areas
+                    // drift softly across the floor, so there are no shapes and no hard edges
+                    const m = 0.55 * f + 0.45 * n;
+                    const thr = 0.78 - 0.62 * a;
+                    cover = smooth(thr - 0.16, thr + 0.16, m);
+                    cover = cover * (0.55 + 0.45 * smooth(0.15, 0.8, a)) + a * a * 0.35;
+                    // Deep snow is not flat: soft ridges and a faint grain stay visible
+                    tone = 0.84 + 0.1 * n + 0.06 * f;
+                } else if (y >= kerb0 && y < kerb1) {
+                    cover = clamp(a * 1.5) * (0.6 + 0.3 * n);
+                    tone = 0.95;
+                } else if (y >= rail0 && y < rail1 && b > r && lum < 90) {
+                    cover = clamp(a * 1.4) * 0.5;
+                    tone = 0.92;
+                } else if (y >= town0 && y < town1 && x > townL && x < townR) {
+                    // Roofs: reddish tiles pale, the lit ones most
+                    // (the painted tiles are muted: about 20-35 levels redder than green/blue)
+                    const red = clamp((r - Math.max(gg, b) - 6) / 22);
+                    cover = a * 0.85 * red * (0.6 + 0.4 * smooth(60, 170, lum)) * (0.65 + 0.35 * f);
+                    tone = 0.9;
+                } else if (y < floorY) {
+                    // Tree crowns and other foliage: sparse pale flecks on the lit side
+                    const fleck = smooth(0.5, 0.75, 0.6 * f + 0.4 * n) * smooth(60, 180, lum);
+                    cover = a * 0.45 * fleck;
+                    tone = 0.92;
+                }
+                if (cover <= 0.004) continue;
+                const s = clamp(cover) * (0.9 + 0.1 * a); // deep snow hides the painted reflections
+                px[i] = r + (SNOW[0] * tone - r) * s;
+                px[i + 1] = gg + (SNOW[1] * tone - gg) * s;
+                px[i + 2] = b + (SNOW[2] * tone - b) * s;
+            }
+        }
+        g.putImageData(img, 0, 0);
+        snowCache.key = key;
         return c;
     }
     // The season's artwork, or the spring original while it is still loading (or if it fails)
@@ -670,7 +783,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             ctx.beginPath();
             ctx.rect(0, floorY, W, H - floorY);
             ctx.clip();
-            ctx.globalAlpha = k * (wet ? 0.26 : 0.34);
+            ctx.globalAlpha = k * (wet ? 0.26 : 0.34) * (1 - 0.95 * (LIGHT ? LIGHT.lying : 0)); // none in snow
             ctx.translate(0, 2 * (geom.drawY + MIRROR_FAR * geom.drawH));
             ctx.scale(1, -1);
             ctx.drawImage(flood, geom.ox, geom.oy);
@@ -697,7 +810,8 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 const shimmer = Math.sin(t * (wet ? 2.6 : 0.7) + i * 2.3);
                 const rx = x + shimmer * (wet ? 0.9 : 0.35) * sc;
                 const frost = LIGHT ? LIGHT.frost : 0; // ice reflects less sharply than water
-                const ra = a * (wet ? 0.3 : 0.4) * (0.85 + 0.15 * shimmer) * (1 - 0.45 * frost);
+                const snowed = LIGHT ? LIGHT.lying : 0; // snow on the floor hides the mirror
+                const ra = a * (wet ? 0.3 : 0.4) * (0.85 + 0.15 * shimmer) * (1 - 0.45 * frost) * (1 - 0.9 * snowed);
                 const sw = Math.max(rw, 1.4) * 1.3, sh = Math.max(rh, rw) * (wet ? 3.4 : 2.6);
                 ctx.save();
                 ctx.translate(rx, ry);
