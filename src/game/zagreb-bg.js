@@ -1764,8 +1764,20 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         S.clouds.sort((a, b) => a.d - b.d);
     }
 
+    // Wallpaper: which way the wind blows across the view. The terrace looks east over Zagreb, so a
+    // north wind blows left to right (+1) and a south wind right to left (-1). Wind straight toward
+    // or away from the viewer still moves things a little (at least a quarter). Without a known
+    // direction (the game): null, and clouds drift right, rain leans left, as they always did.
+    function windSide() {
+        if (typeof ENV.windDir !== 'number') return null;
+        const c = Math.cos(ENV.windDir * Math.PI / 180);
+        return (c < 0 ? -1 : 1) * Math.max(0.25, Math.abs(c));
+    }
+
     function stepPrecip(dt, t) {
         const { W, H, wx } = S;
+        const side = windSide();
+        const across = side === null ? -1 : side; // rain, snow and hail move this way
         const T = zagrebStyle.tune;
         const mod = wx.showers ? 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * 0.22)) : 1;
         const out = { rain: [], snow: [], hail: [] };
@@ -1780,18 +1792,18 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             const p = S.pools.rain[i];
             const vy = H * (wx.drizzle ? 0.45 : 1.05) * (0.55 + 0.45 * p.z);
             const slant = T.slantBase + wx.wind * T.slantWind;
-            p.x -= vy * slant * dt;
+            p.x += across * vy * slant * dt;
             p.y += vy * dt;
             wrap(p);
             const len = H * (wx.drizzle ? 0.012 : 0.03) * p.z;
-            p.dx = -len * slant;
+            p.dx = across * len * slant;
             p.dy = len;
             out.rain.push(p);
         }
         n = Math.round(POOL.snow * wx.snow * mod);
         for (let i = 0; i < n; i++) {
             const p = S.pools.snow[i];
-            p.x += (-H * 0.012 * (1 + wx.wind * T.snowWind) + Math.sin(t * 0.9 + p.s * 20) * H * 0.01) * dt;
+            p.x += (across * H * 0.012 * (1 + wx.wind * T.snowWind) + Math.sin(t * 0.9 + p.s * 20) * H * 0.01) * dt;
             p.y += H * (wx.grains ? 0.2 : 0.065) * (0.5 + 0.5 * p.z) * dt;
             wrap(p);
             p.r = (wx.grains ? 0.5 : 1) * (0.7 + p.z * 1.3) * unit;
@@ -1801,7 +1813,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         for (let i = 0; i < n; i++) {
             const p = S.pools.hail[i];
             const vy = H * 1.25 * (0.7 + 0.3 * p.z);
-            p.x -= vy * (T.hailBase + wx.wind * T.hailWind) * dt;
+            p.x += across * vy * (T.hailBase + wx.wind * T.hailWind) * dt;
             p.y += vy * dt;
             wrap(p);
             p.r = (0.7 + p.z * 0.8) * unit;
@@ -1945,7 +1957,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     function placeClouds(fw, wall, dt) {
         const wx = fw.wx;
         const T = zagrebStyle.tune;
-        const speed = c => (T.cloudBase + wx.wind * T.cloudWind) * c.d * (WORLD.RW / WORLD.DW);
+        const side = windSide();
+        const dir = side === null ? 1 : side; // clouds and rain go the same way (wallpaper)
+        const speed = c => dir * (T.cloudBase + wx.wind * T.cloudWind) * c.d * (WORLD.RW / WORLD.DW);
         const byClock = WORLD.span || wallpaper();
         for (const c of S.clouds) {
             if (byClock) {
@@ -1953,6 +1967,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             } else {
                 c.x += dt * speed(c);
                 if (c.x > 1.3) c.x = -0.3;
+                if (c.x < -0.3) c.x = 1.3;
             }
             c.px = c.x * fw.W;
         }
