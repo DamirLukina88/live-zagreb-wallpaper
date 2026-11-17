@@ -116,7 +116,13 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // The shared weather model, plus a key so the light is recomputed only when the weather changes
     function wxFor(code, isDay, windKmh) {
         const wx = codeToWx(code, isDay, windKmh);
-        wx.key = code + '|' + (isDay ? 1 : 0) + '|' + wx.wind;
+        // Wallpaper: snow lies for as long as the weather service measures it on the ground, not
+        // only while it falls. 1 cm dusts the roofs and terrace, 8 cm covers them.
+        if (typeof ENV.snowDepthCm === 'number' && ENV.snowDepthCm > 0.2) {
+            const lying = Math.round(clamp(ENV.snowDepthCm / 8) * 20) / 20;
+            wx.snowCover = Math.max(wx.snowCover || 0, lying);
+        }
+        wx.key = code + '|' + (isDay ? 1 : 0) + '|' + wx.wind + '|' + (wx.snowCover || 0);
         return wx;
     }
 
