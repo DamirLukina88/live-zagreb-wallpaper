@@ -124,7 +124,14 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         wx.lying = typeof depth === 'number'
             ? (depth > 0.2 ? Math.round(clamp(depth / 5) * 20) / 20 : 0)
             : (wx.snow > 0 ? Math.round(wx.snowCover * 0.6 * 20) / 20 : 0);
-        wx.key = code + '|' + (isDay ? 1 : 0) + '|' + wx.wind + '|' + wx.lying;
+        // Wallpaper: in dry weather (codes 0-3) the amount of cloud follows the measured cover in
+        // 10 % steps, so 20 % and 60 % look different; rain, snow, storms and fog keep their own
+        // skies. Steps keep the clouds from reshuffling on every small change.
+        if (code <= 3 && typeof ENV.cloudPct === 'number') {
+            wx.cloud = Math.round(clamp(ENV.cloudPct / 100) * 10) / 10;
+            wx.dark = wx.cloud > 0.9 ? 0.15 : 0;
+        }
+        wx.key = code + '|' + (isDay ? 1 : 0) + '|' + wx.wind + '|' + wx.lying + '|' + wx.cloud;
         return wx;
     }
 
