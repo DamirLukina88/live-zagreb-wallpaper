@@ -778,6 +778,35 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // k: how strongly the lights are on, 0..1
     // list: the painting's lights, or the extra lamps along the extended railing (span)
     // part: 'all', or only the 'flood' wash, or only the 'points' (see drawLightsSoft)
+    // Wallpaper: the town goes to sleep (the user's choices, 2026-11-17). Each house window has its
+    // own bedtime between 22:00 and 01:00, about one in ten stays lit all night, and about four in
+    // ten come back on between 05:30 and 06:30 while it is still dark; each fades over a minute.
+    // The cathedral's floodlights fade out from 23:45 to midnight and return at dusk. Lamps, the
+    // clock and the tower openings stay on. In the weather city's own time.
+    function localHours() {
+        const d = env().date;
+        const off = typeof ENV.utcOffsetSeconds === 'number' ? ENV.utcOffsetSeconds * 1000 : -d.getTimezoneOffset() * 60000;
+        const t = new Date(d.getTime() + off);
+        return t.getUTCHours() + t.getUTCMinutes() / 60 + t.getUTCSeconds() / 3600;
+    }
+    function windowOn(i, h) {
+        if (!wallpaper()) return 1;
+        const h24 = h < 12 ? h + 24 : h; // evening hours run on past midnight: 01:00 = 25
+        if (hash01(i * 5.1 + 0.3) < 0.1) return 1; // night owls
+        const bedtime = 22 + 3 * hash01(i * 3.7 + 1.1);
+        const asleep = clamp((h24 - bedtime) * 60); // one-minute fade
+        if (h < 12 && hash01(i * 2.9 + 7.7) < 0.4) {
+            const wake = 5.5 + hash01(i * 1.3 + 4.2);
+            return Math.max(1 - asleep, clamp((h - wake) * 60));
+        }
+        return 1 - asleep;
+    }
+    function floodOn(h) {
+        if (!wallpaper()) return 1;
+        const h24 = h < 12 ? h + 24 : h;
+        return 1 - clamp((h24 - 23.75) / 0.25);
+    }
+
     function drawLights(f, geom, k, list = ZAGREB_LIGHTS, part = 'all') {
         if (k <= 0.01) return;
         const { ctx, t, wx, W, H } = f;
@@ -789,17 +818,19 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // Rain breaks the mirror up: reflections shimmer more and lose a little strength
         const wet = wx.rain > 0.15 ? 1 : 0;
 
-        const flood = part === 'points' ? null : floodLayer(list, geom);
+        const hours = localHours();
+        const floodK = floodOn(hours);
+        const flood = part === 'points' || floodK <= 0.01 ? null : floodLayer(list, geom);
         if (flood) {
             ctx.save();
             ctx.globalCompositeOperation = 'screen';
-            ctx.globalAlpha = k * 0.85;
+            ctx.globalAlpha = k * 0.85 * floodK;
             ctx.drawImage(flood, geom.ox, geom.oy);
             // The floodlit walls again, upside down in the wet floor
             ctx.beginPath();
             ctx.rect(0, floorY, W, H - floorY);
             ctx.clip();
-            ctx.globalAlpha = k * (wet ? 0.26 : 0.34) * (1 - 0.95 * (LIGHT ? LIGHT.lying : 0)); // none in snow
+            ctx.globalAlpha = k * floodK * (wet ? 0.26 : 0.34) * (1 - 0.95 * (LIGHT ? LIGHT.lying : 0)); // none in snow
             ctx.translate(0, 2 * (geom.drawY + MIRROR_FAR * geom.drawH));
             ctx.scale(1, -1);
             ctx.drawImage(flood, geom.ox, geom.oy);
@@ -816,7 +847,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
             const flick = 1 + Math.sin(t * (0.5 + hash01(i) * 1.2) + i * 1.7) * 0.07 + Math.sin(t * 0.23 + i) * 0.04;
             // Distant pinpoints twinkle through the air; nearer lights only breathe
-            const a = clamp(k * (L.t === 'far' ? 0.55 + 0.45 * Math.sin(t * (1.1 + hash01(i) * 1.6) + i * 3.1) : flick));
+            const awake = L.t === 'win' ? windowOn(i, hours) : 1;
+            if (awake <= 0.01) return;
+            const a = clamp(k * awake * (L.t === 'far' ? 0.55 + 0.45 * Math.sin(t * (1.1 + hash01(i) * 1.6) + i * 3.1) : flick));
             const rw = Math.max(1.2, L.w * sc), rh = Math.max(1.2, L.h * sc);
             const rgb = (L.t === 'clock' ? [255, 246, 220] : L.t === 'lamp' ? [255, 226, 160] : TINT[L.c] || TINT.amber).join(',');
 
