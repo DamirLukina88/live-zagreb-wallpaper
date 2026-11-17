@@ -88,24 +88,36 @@ function spanConfig() {
 }
 
 // The card sits in the top-right corner of the scene display, and only where that display is
+// The card sits in the chosen corner of the scene display (top right by default), only where that
+// display is, and not at all if the user hid it. Bottom corners keep clear of a desktop panel.
+const CARD_GAP = 24, CARD_GAP_BOTTOM = 72;
 function placeCard(span) {
     const panel = document.getElementById('weather-panel');
     if (!panel) return;
-    if (!span) {
-        panel.style.display = '';
-        panel.style.right = panel.style.top = '';
+    const st = panel.style;
+    st.top = st.right = st.bottom = st.left = 'auto'; // the stylesheet pins top right
+    if (!settings.showCard) {
+        st.display = 'none';
         return;
     }
-    const { view: v, scene: s } = span;
-    const left = Math.max(s.x, v.x), right = Math.min(s.x + s.w, v.x + v.w);
-    const top = Math.max(s.y, v.y), bottom = Math.min(s.y + s.h, v.y + v.h);
-    if (right - left < 200 || bottom - top < 200) {
-        panel.style.display = 'none';
-        return;
+    // The visible part of the scene display, in this page's CSS pixels
+    let box = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+    if (span) {
+        const { view: v, scene: s } = span;
+        const left = Math.max(s.x, v.x), right = Math.min(s.x + s.w, v.x + v.w);
+        const top = Math.max(s.y, v.y), bottom = Math.min(s.y + s.h, v.y + v.h);
+        if (right - left < 200 || bottom - top < 200) {
+            st.display = 'none';
+            return;
+        }
+        box = { left: left - v.x, top: top - v.y, right: right - v.x, bottom: bottom - v.y };
     }
-    panel.style.display = '';
-    panel.style.right = `${Math.round(v.x + v.w - right) + 24}px`;
-    panel.style.top = `${Math.round(top - v.y) + 24}px`;
+    st.display = '';
+    const c = settings.card || 'tr';
+    if (c[0] === 't') st.top = `${Math.round(box.top) + CARD_GAP}px`;
+    else st.bottom = `${Math.round(window.innerHeight - box.bottom) + CARD_GAP_BOTTOM}px`;
+    if (c[1] === 'r') st.right = `${Math.round(window.innerWidth - box.right) + CARD_GAP}px`;
+    else st.left = `${Math.round(box.left) + CARD_GAP}px`;
 }
 
 let lastSpanKey = '';
@@ -123,6 +135,7 @@ window.addEventListener('resize', applyLayout);
 if (settings.layout === 'span' && !settings.view) detectScreens();
 onSettingsChange((s, changed) => {
     if (changed.includes('layout') && s.layout === 'span' && !s.view && !detected) detectScreens();
+    if (changed.includes('card')) placeCard(spanConfig());
 });
 
 onPauseChange(paused => bg.setPaused(paused));

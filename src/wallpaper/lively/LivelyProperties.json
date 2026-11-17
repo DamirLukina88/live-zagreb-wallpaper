@@ -40,6 +40,24 @@
     "step": 1,
     "help": "Used only while rain, snow, hail or a storm moves, and only on mains power; otherwise the picture stays still (redrawn once a minute) to save GPU and battery"
   },
+  "showCard": {
+    "type": "checkbox",
+    "text": "Vremenska kartica / Weather card",
+    "value": true,
+    "help": "Show the weather card"
+  },
+  "cardCorner": {
+    "type": "dropdown",
+    "text": "Kut kartice / Card corner",
+    "value": 0,
+    "items": [
+      "Gore desno / Top right",
+      "Gore lijevo / Top left",
+      "Dolje desno / Bottom right",
+      "Dolje lijevo / Bottom left"
+    ],
+    "help": "Which corner of the scene display the weather card sits in"
+  },
   "layout": {
     "type": "dropdown",
     "text": "Raspored / Layout",

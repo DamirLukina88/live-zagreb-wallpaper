@@ -9,7 +9,7 @@ WallpaperItem {
 
     // This plugin's version (the same as metadata.json; the build checks it). The page compares it
     // with the version it needs and shows "plugin update available" on the weather card if it is older.
-    readonly property string hostVersion: "1.2.1"
+    readonly property string hostVersion: "1.3.0"
     readonly property string quality: root.configuration.Quality === "low" ? "low" : "auto"
     readonly property int fps: Math.max(5, Math.min(30, Number(root.configuration.FrameRate) || 15))
     readonly property string onlineUrl: "https://damirlukina88.github.io/live-zagreb-wallpaper/"
@@ -63,6 +63,8 @@ WallpaperItem {
             quality: root.quality,
             animBattery: !!root.configuration.AnimateOnBattery,
             fps: root.fps,
+            card: root.configuration.CardCorner || "tr",
+            showCard: root.configuration.ShowCard !== false,
             layout: info.layout
         };
         if (info.layout === "span") {
@@ -77,7 +79,8 @@ WallpaperItem {
         var c = root.configuration.City || "Zagreb";
         var l = root.configuration.Language || "hr";
         var h = "city=" + encodeURIComponent(c) + "&lang=" + encodeURIComponent(l) + "&quality=" + root.quality
-            + "&animbattery=" + (root.configuration.AnimateOnBattery ? "1" : "0") + "&fps=" + root.fps + "&host=kde-" + root.hostVersion;
+            + "&animbattery=" + (root.configuration.AnimateOnBattery ? "1" : "0") + "&fps=" + root.fps + "&host=kde-" + root.hostVersion
+            + "&card=" + (root.configuration.CardCorner || "tr") + "&showcard=" + (root.configuration.ShowCard === false ? "0" : "1");
         var info = root.layoutInfo;
         h += "&layout=" + info.layout;
         if (info.layout === "span") {

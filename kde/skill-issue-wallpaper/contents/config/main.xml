@@ -40,6 +40,14 @@
       <min>5</min>
       <max>30</max>
     </entry>
+    <entry name="CardCorner" type="String">
+      <label>Weather card corner: tr (top right), tl, br or bl</label>
+      <default>tr</default>
+    </entry>
+    <entry name="ShowCard" type="Bool">
+      <label>Show the weather card</label>
+      <default>true</default>
+    </entry>
     <entry name="PauseRule" type="String">
       <label>Pause when a fullscreen or maximized window covers: screen (this display only) or all (any display)</label>
       <default>screen</default>

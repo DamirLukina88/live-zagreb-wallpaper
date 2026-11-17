@@ -16,6 +16,8 @@ Kirigami.FormLayout {
     property alias cfg_HeightOffset: offsetSpin.value
     property alias cfg_Bundled: bundledCheck.checked
     property alias cfg_FrameRate: fpsSpin.value
+    property string cfg_CardCorner
+    property alias cfg_ShowCard: showCardCheck.checked
 
     QQC2.TextField {
         id: cityField
@@ -47,6 +49,28 @@ Kirigami.FormLayout {
         ]
         currentIndex: root.cfg_Quality === "low" ? 1 : 0
         onActivated: root.cfg_Quality = currentValue
+    }
+
+    QQC2.CheckBox {
+        id: showCardCheck
+        Kirigami.FormData.label: "Vremenska kartica / Weather card:"
+        text: "Prikaži / Show"
+    }
+
+    QQC2.ComboBox {
+        id: cornerCombo
+        Kirigami.FormData.label: "Kut kartice / Card corner:"
+        enabled: showCardCheck.checked
+        textRole: "text"
+        valueRole: "value"
+        model: [
+            { text: "Gore desno / Top right", value: "tr" },
+            { text: "Gore lijevo / Top left", value: "tl" },
+            { text: "Dolje desno / Bottom right", value: "br" },
+            { text: "Dolje lijevo / Bottom left", value: "bl" }
+        ]
+        currentIndex: Math.max(0, indexOfValue(root.cfg_CardCorner || "tr"))
+        onActivated: root.cfg_CardCorner = currentValue
     }
 
     QQC2.CheckBox {

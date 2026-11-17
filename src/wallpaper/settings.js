@@ -11,6 +11,8 @@
 //                 equal displays; the scene is on `slot` (1-based from the left, 0 = primary/middle)
 
 const num = s => (s === null || s === '' || isNaN(Number(s)) ? null : Number(s));
+// Weather card corners: top right (default), top left, bottom right, bottom left
+export const CARD_CORNERS = ['tr', 'tl', 'br', 'bl'];
 function rect(s, n = 4) {
     if (!s) return null;
     const v = (Array.isArray(s) ? s : String(s).split(',')).map(Number);
@@ -38,6 +40,8 @@ function readHash() {
         dry: num(p.get('dry')),
         advent: p.has('advent') ? p.get('advent') === '1' : null,
         soontest: p.get('soontest') || null,
+        card: p.get('card') || null,
+        showCard: p.has('showcard') ? p.get('showcard') !== '0' : null,
         power: p.get('power') || null,
         host: p.get('host') || null,
         any: raw.length > 0,
@@ -61,7 +65,7 @@ function readStored() {
 // Geometry is not stored: it belongs to the display this page is on, which the host sends each time
 function store(s) {
     try {
-        localStorage.setItem('wp_settings', JSON.stringify({ city: s.city, lang: s.lang, quality: s.quality, animBattery: s.animBattery, fps: s.fps, layout: s.layout, slots: s.slots, slot: s.slot }));
+        localStorage.setItem('wp_settings', JSON.stringify({ city: s.city, lang: s.lang, quality: s.quality, animBattery: s.animBattery, fps: s.fps, layout: s.layout, slots: s.slots, slot: s.slot, card: s.card, showCard: s.showCard }));
     } catch {}
 }
 // Frames per second while precipitation moves (15 by default); otherwise the picture is still (zagreb-bg redraws it once a minute)
@@ -114,6 +118,18 @@ export function updateSettings(next, immediate = false) {
             settings.fps = fps;
             changed.push('fps');
         }
+    }
+    // The weather card: which corner of the scene display, and whether it is shown at all
+    if (next.card !== undefined && next.card !== null) {
+        const card = CARD_CORNERS.includes(next.card) ? next.card : 'tr';
+        if (card !== settings.card) {
+            settings.card = card;
+            changed.push('card');
+        }
+    }
+    if (next.showCard !== undefined && next.showCard !== null && !!next.showCard !== settings.showCard) {
+        settings.showCard = !!next.showCard;
+        changed.push('card');
     }
     if (next.layout !== undefined) {
         const layout = next.layout === 'span' ? 'span' : 'clone';
@@ -172,6 +188,8 @@ export const settings = {
     advent: fromHash.advent,
     // soontest=rain:40 (rain starts in 40 min), rain-until:30 (it stops in 30 min), snow:20 ...
     soontest: fromHash.soontest,
+    card: CARD_CORNERS.includes(fromHash.card || stored.card) ? (fromHash.card || stored.card) : 'tr',
+    showCard: fromHash.showCard !== null ? fromHash.showCard : stored.showCard ?? true,
     power: fromHash.power === 'battery' || fromHash.power === 'ac' ? fromHash.power : null,
     // host package version (#host=kde-1.2.0); hosted: opened by a wallpaper host, not typed into a browser
     host: fromHash.host,
@@ -188,6 +206,7 @@ window.wallpaperSettings = function (s) {
     if (!s || typeof s !== 'object') return;
     updateSettings({
         city: s.city, lang: s.lang, quality: s.quality, animBattery: s.animBattery, fps: s.fps,
+        card: s.card, showCard: s.showCard,
         layout: s.layout, view: s.view, desk: s.desk, scene: s.scene
     });
 };
@@ -232,6 +251,12 @@ window.livelyPropertyListener = function (name, value) {
             break;
         case 'layout': // dropdown: 0 clone, 1 span
             updateSettings({ layout: value === 1 || value === 'span' ? 'span' : 'clone' }, true);
+            break;
+        case 'cardCorner': // dropdown: 0 top right, 1 top left, 2 bottom right, 3 bottom left
+            updateSettings({ card: CARD_CORNERS[Number(value)] || 'tr' }, true);
+            break;
+        case 'showCard':
+            updateSettings({ showCard: !!value }, true);
             break;
         case 'spanDisplays':
             updateSettings({ slots: value }, true);
