@@ -9,7 +9,7 @@ It reuses the game's Zagreb Cathedral terrace background, physical day/night sun
 
 ## Features
 
-- **Self-contained**: the game modules it reuses (`zagreb-bg.js`, `sun.js`, `zagreb-lights.js`, `weather-bg.js`, `i18n.js`) are copied into [`src/game/`](src/game/) from the game repo; `zagreb-bg.js` carries the wallpaper's additions (scale hook, span, pause).
+- **Self-contained**: the game modules it reuses (`zagreb-bg.js`, `sun.js`, `zagreb-lights.js`, `weather-bg.js`, `i18n.js`) are copied into [`src/game/`](src/game/) from the game repo; `zagreb-bg.js` carries the wallpaper's additions (still picture and adaptive quality, span, pause, and the wallpaper's scene details: seasons, lying snow, clouds, wind, the town at night, Advent), and `moon.js` is the wallpaper's own.
 - **Multiple displays**: *Clone* (the whole scene on every display) or *Span* (one scene over all displays: the terrace and weather card on one display, the same sky, sun, moon, clouds and weather continuing across the others, which show frosted glass lit like the scene, or, with the glass switched off, the sky alone).
 - **Physical Day & Night Cycle**: Real astronomical sun altitude calculated from local time and city coordinates (smooth transitions through day, golden hour, blue hour, and night).
 - **Realistic Moon & Seasons**: the moon rises, crosses the sky and sets where it really is, in its real phase. The seasons arrive on dates typical for Zagreb (spring 20 March, summer 1 June, autumn 8 October, winter 25 November; half a year later south of the equator), and the paintings cross-fade over about three weeks.

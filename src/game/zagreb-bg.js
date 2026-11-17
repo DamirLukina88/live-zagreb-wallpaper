@@ -555,7 +555,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // As in blendedArt: a painting still loading has no size, and a 0x0 result would be kept
         const size = x => x.naturalWidth || x.width || 0;
         if (!size(a) || !size(b)) return size(a) ? a : b;
-        const key =[a.src || a.width, b.src || b.width, t.toFixed(3), name === 'dry' ? blendCache.key : ''].join('|');
+        const key = [a.src || a.width, b.src || b.width, t.toFixed(3), name === 'dry' ? blendCache.key : ''].join('|');
         const hit = mixCache[name];
         if (hit && hit.key === key) return hit.canvas;
         const c = (hit && hit.canvas) || document.createElement('canvas');
