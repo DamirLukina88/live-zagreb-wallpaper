@@ -18,6 +18,7 @@
 import * as SUN from './sun.js';
 import { ZAGREB_LIGHTS } from './zagreb-lights.js';
 import { codeToWx } from './weather-bg.js';
+import { moonPosition, moonPass } from './moon.js';
 
 const FRAME_MS = 1000 / 30;
 // Wallpaper: battery first. Every frame makes the desktop compositor repaint the whole display,
@@ -273,8 +274,16 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // (in a span the arc runs from the scene's top, not the top of the tallest display)
         const skyH = L.horizonY - WORLD.RY;
         L.sunY = alt >= 0 ? L.horizonY - Math.pow(clamp(alt / 65), 0.8) * skyH * 0.86 : L.horizonY - alt * RH * 0.012;
-        L.moonX = W * (0.24 + 0.62 * clamp(nightP));
-        L.moonY = L.horizonY - Math.sin(Math.PI * clamp(nightP)) * skyH * 0.72 - RH * 0.03;
+        // Wallpaper: the moon is where it really is. It crosses the same arc as the sun, from its
+        // rise to its set, at its real height, so some nights it is low, late or not up at all.
+        const mAlt = moonPosition(e.date, e.lat, e.lon).altitude;
+        const pass = moonPass(e.date, e.lat, e.lon);
+        const mp = pass.rise && pass.set ? (now - pass.rise.getTime()) / (pass.set.getTime() - pass.rise.getTime()) : 0.5;
+        L.moonX = W * (0.24 + 0.62 * clamp(mp));
+        // (a high winter full moon would leave the screen: the whole disc and its halo stay in view)
+        const moonTop = WORLD.RY + Math.min(WORLD.RW, RH) * 0.05 * 2.4;
+        L.moonY = Math.max(moonTop, L.horizonY - Math.pow(clamp(mAlt / 65), 0.8) * skyH * 0.86 - RH * 0.03);
+        L.moonUp = clamp(mAlt / 3); // fades in as it clears the horizon
         L.lowSun = clamp(1 - Math.abs(alt - 1) / 9); // 1 around sunrise and sunset, 0 by mid-morning
 
         // Weather: how much of the clear-sky colour survives, and what grey replaces the rest
@@ -301,7 +310,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         L.sunVis = clearView * clamp((alt + 1.5) / 1.5);
         L.sunCol = colorAt(SUN_COLOR, alt);
         L.moon = currentMoon(e.date);
-        L.moonVis = clearView * clamp((-alt - 2) / 4);
+        L.moonVis = clearView * clamp((-alt - 2) / 4) * L.moonUp;
         L.moonA = L.moonVis * L.moon.lit;
         L.starVis = L.stars * (1 - clamp(wx.cloud / 0.7)) * (1 - wx.fog * 0.7);
         // Lamps and windows also come on under a dark daytime storm or thick fog
