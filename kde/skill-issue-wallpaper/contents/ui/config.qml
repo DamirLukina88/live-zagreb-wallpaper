@@ -14,6 +14,7 @@ Kirigami.FormLayout {
     property string cfg_SceneDisplay
     property string cfg_PauseRule
     property alias cfg_HeightOffset: offsetSpin.value
+    property alias cfg_SideGlass: glassCheck.checked
     property alias cfg_Bundled: bundledCheck.checked
     property alias cfg_FrameRate: fpsSpin.value
     property string cfg_CardCorner
@@ -131,6 +132,13 @@ Kirigami.FormLayout {
         }
         currentIndex: Math.max(0, indexOfValue(root.cfg_SceneDisplay))
         onActivated: root.cfg_SceneDisplay = currentValue
+    }
+
+    QQC2.CheckBox {
+        id: glassCheck
+        Kirigami.FormData.label: "Bočni zasloni / Side displays:"
+        enabled: root.cfg_Layout === "span"
+        text: "Mliječno staklo (isključeno: samo nebo) / Frosted glass (off: sky only)"
     }
 
     QQC2.SpinBox {

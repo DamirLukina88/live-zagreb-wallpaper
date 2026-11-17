@@ -48,6 +48,10 @@
       <label>Show the weather card</label>
       <default>true</default>
     </entry>
+    <entry name="SideGlass" type="Bool">
+      <label>Span: frosted glass on the displays beside the scene (off: the sky continues over them)</label>
+      <default>true</default>
+    </entry>
     <entry name="PauseRule" type="String">
       <label>Pause when a fullscreen or maximized window covers: screen (this display only) or all (any display)</label>
       <default>screen</default>

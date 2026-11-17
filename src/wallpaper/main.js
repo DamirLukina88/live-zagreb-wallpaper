@@ -61,10 +61,30 @@ async function detectScreens() {
     }
 }
 
+// Lively's span: one window over all displays. Even without permission to read the displays,
+// the browser knows the primary display's size and where this window starts relative to it, so the
+// scene can sit exactly on the primary display and every other part becomes the sides.
+function windowSpans() {
+    const sw = window.screen && window.screen.width, sh = window.screen && window.screen.height;
+    if (!sw || !sh) return false;
+    // more than a sliver larger than the primary display: the window covers other displays too
+    return window.innerWidth - sw > 64 || window.innerHeight - sh > 64;
+}
+function primaryRect() {
+    if (!windowSpans()) return null;
+    const sw = window.screen.width, sh = window.screen.height;
+    const x = -(window.screenX || 0), y = -(window.screenY || 0);
+    // the primary display must lie inside this window, or the numbers are not usable
+    if (x < -2 || y < -2 || x + sw > window.innerWidth + 2 || y + sh > window.innerHeight + 2) return null;
+    return { x, y, w: sw, h: sh };
+}
 function spanConfig() {
-    if (settings.layout !== 'span') return null;
+    // KDE says so; Lively's span window is detected by its size (no setting needed)
+    const span = settings.layout === 'span' || (!settings.view && windowSpans());
+    if (!span) return null;
+    const glass = settings.glass;
     if (settings.view && settings.desk && settings.scene) {
-        return { view: settings.view, desk: settings.desk, scene: settings.scene };
+        return { view: settings.view, desk: settings.desk, scene: settings.scene, glass };
     }
     const w = window.innerWidth, h = window.innerHeight;
     if (detected && detected.length > 1) {
@@ -78,16 +98,38 @@ function spanConfig() {
         const pick = settings.slot >= 1 && settings.slot <= byLeft.length ? byLeft[settings.slot - 1]
             : detected.find(s => s.primary) || [...detected].sort((a, b) => b.w * b.h - a.w * a.h)[0];
         const scene = { x: (pick.x - minX) * kx, y: (pick.y - minY) * ky, w: pick.w * kx, h: pick.h * ky };
-        return { view: { x: 0, y: 0, w, h }, desk: { w, h }, scene };
+        return { view: { x: 0, y: 0, w, h }, desk: { w, h }, scene, glass };
     }
+    const primary = settings.slot >= 1 ? null : primaryRect();
+    if (primary) return { view: { x: 0, y: 0, w, h }, desk: { w, h }, scene: primary, glass };
     const n = settings.slots || 1;
     if (n < 2) return null;
     const slot = Math.min(n, settings.slot >= 1 ? settings.slot : Math.ceil(n / 2)) - 1;
     const sw = w / n;
-    return { view: { x: 0, y: 0, w, h }, desk: { w, h }, scene: { x: slot * sw, y: 0, w: sw, h } };
+    return { view: { x: 0, y: 0, w, h }, desk: { w, h }, scene: { x: slot * sw, y: 0, w: sw, h }, glass };
 }
 
-// The card sits in the top-right corner of the scene display, and only where that display is
+// "Show display info" (Lively setting / #displayinfo=1): what the page knows, for diagnosing a span
+function showDisplayInfo() {
+    let box = document.getElementById('wp-displayinfo');
+    if (!settings.displayInfo) { if (box) box.remove(); return; }
+    if (!box) {
+        box = document.createElement('pre');
+        box.id = 'wp-displayinfo';
+        box.style.cssText = 'position:fixed;left:24px;top:24px;z-index:9;margin:0;padding:8px 10px;font:12px monospace;color:#e6f0ff;background:rgba(0,0,0,.72);border-radius:8px;pointer-events:none;white-space:pre';
+        document.body.appendChild(box);
+    }
+    const sp = spanConfig();
+    const r = o => (o ? `${Math.round(o.x)},${Math.round(o.y)} ${Math.round(o.w)}x${Math.round(o.h)}` : '-');
+    box.textContent = [
+        `window   ${window.innerWidth}x${window.innerHeight} at ${window.screenX},${window.screenY}  dpr ${window.devicePixelRatio}`,
+        `primary  ${window.screen.width}x${window.screen.height}  extended ${window.screen.isExtended ?? '?'}`,
+        `displays ${detected ? detected.map(d => r(d) + (d.primary ? '*' : '')).join(' | ') : 'not readable'}`,
+        `span     ${sp ? 'yes' : 'no'}  scene ${sp ? r(sp.scene) : '-'}  glass ${settings.glass ? 'on' : 'off'}`,
+        `layout   ${settings.layout}  slots ${settings.slots}  slot ${settings.slot}`
+    ].join('\n');
+}
+
 // The card sits in the chosen corner of the scene display (top right by default), only where that
 // display is, and not at all if the user hid it. Bottom corners keep clear of a desktop panel.
 const CARD_GAP = 24, CARD_GAP_BOTTOM = 72;
@@ -122,6 +164,7 @@ function placeCard(span) {
 
 let lastSpanKey = '';
 function applyLayout() {
+    showDisplayInfo();
     const span = spanConfig();
     const key = JSON.stringify(span);
     placeCard(span);
@@ -132,10 +175,11 @@ function applyLayout() {
 applyLayout();
 window.addEventListener('resize', applyLayout);
 // Only Lively's span needs to ask (KDE sends the geometry); asking is harmless elsewhere
-if (settings.layout === 'span' && !settings.view) detectScreens();
+if ((settings.layout === 'span' || windowSpans()) && !settings.view) detectScreens();
 onSettingsChange((s, changed) => {
     if (changed.includes('layout') && s.layout === 'span' && !s.view && !detected) detectScreens();
     if (changed.includes('card')) placeCard(spanConfig());
+    if (changed.includes('glass') || changed.includes('displayInfo')) applyLayout();
 });
 
 onPauseChange(paused => bg.setPaused(paused));

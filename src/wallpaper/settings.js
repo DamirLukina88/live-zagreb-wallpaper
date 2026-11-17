@@ -41,6 +41,8 @@ function readHash() {
         advent: p.has('advent') ? p.get('advent') === '1' : null,
         soontest: p.get('soontest') || null,
         card: p.get('card') || null,
+        glass: p.has('glass') ? p.get('glass') !== '0' : null,
+        displayInfo: p.has('displayinfo') ? p.get('displayinfo') === '1' : null,
         showCard: p.has('showcard') ? p.get('showcard') !== '0' : null,
         power: p.get('power') || null,
         host: p.get('host') || null,
@@ -65,7 +67,7 @@ function readStored() {
 // Geometry is not stored: it belongs to the display this page is on, which the host sends each time
 function store(s) {
     try {
-        localStorage.setItem('wp_settings', JSON.stringify({ city: s.city, lang: s.lang, quality: s.quality, animBattery: s.animBattery, fps: s.fps, layout: s.layout, slots: s.slots, slot: s.slot, card: s.card, showCard: s.showCard }));
+        localStorage.setItem('wp_settings', JSON.stringify({ city: s.city, lang: s.lang, quality: s.quality, animBattery: s.animBattery, fps: s.fps, layout: s.layout, slots: s.slots, slot: s.slot, card: s.card, showCard: s.showCard, glass: s.glass }));
     } catch {}
 }
 // Frames per second while precipitation moves (15 by default); otherwise the picture is still (zagreb-bg redraws it once a minute)
@@ -126,6 +128,14 @@ export function updateSettings(next, immediate = false) {
             settings.card = card;
             changed.push('card');
         }
+    }
+    if (next.glass !== undefined && next.glass !== null && !!next.glass !== settings.glass) {
+        settings.glass = !!next.glass;
+        changed.push('glass');
+    }
+    if (next.displayInfo !== undefined && next.displayInfo !== null && !!next.displayInfo !== settings.displayInfo) {
+        settings.displayInfo = !!next.displayInfo;
+        changed.push('displayInfo');
     }
     if (next.showCard !== undefined && next.showCard !== null && !!next.showCard !== settings.showCard) {
         settings.showCard = !!next.showCard;
@@ -190,6 +200,9 @@ export const settings = {
     soontest: fromHash.soontest,
     card: CARD_CORNERS.includes(fromHash.card || stored.card) ? (fromHash.card || stored.card) : 'tr',
     showCard: fromHash.showCard !== null ? fromHash.showCard : stored.showCard ?? true,
+    // frosted glass on the displays beside the scene (span); off = the sky continues over them
+    glass: fromHash.glass !== null ? fromHash.glass : stored.glass ?? true,
+    displayInfo: fromHash.displayInfo ?? false,
     power: fromHash.power === 'battery' || fromHash.power === 'ac' ? fromHash.power : null,
     // host package version (#host=kde-1.2.0); hosted: opened by a wallpaper host, not typed into a browser
     host: fromHash.host,
@@ -206,7 +219,7 @@ window.wallpaperSettings = function (s) {
     if (!s || typeof s !== 'object') return;
     updateSettings({
         city: s.city, lang: s.lang, quality: s.quality, animBattery: s.animBattery, fps: s.fps,
-        card: s.card, showCard: s.showCard,
+        card: s.card, showCard: s.showCard, glass: s.glass,
         layout: s.layout, view: s.view, desk: s.desk, scene: s.scene
     });
 };
@@ -257,6 +270,12 @@ window.livelyPropertyListener = function (name, value) {
             break;
         case 'showCard':
             updateSettings({ showCard: !!value }, true);
+            break;
+        case 'sideGlass':
+            updateSettings({ glass: !!value }, true);
+            break;
+        case 'displayInfo':
+            updateSettings({ displayInfo: !!value }, true);
             break;
         case 'spanDisplays':
             updateSettings({ slots: value }, true);

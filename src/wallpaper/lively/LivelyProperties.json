@@ -85,5 +85,17 @@
     "max": 6,
     "step": 1,
     "help": "Span: which display (counted from the left) shows the terrace and the weather card. 0 = automatic (the primary display)"
+  },
+  "sideGlass": {
+    "type": "checkbox",
+    "text": "Mliječno staklo sa strane / Frosted glass on the sides",
+    "value": true,
+    "help": "Span: frosted glass on the displays beside the scene; off shows the sky continuing over them"
+  },
+  "displayInfo": {
+    "type": "checkbox",
+    "text": "Prikaži podatke o zaslonima / Show display info",
+    "value": false,
+    "help": "Prints what the wallpaper knows about your displays (for fixing span alignment)"
   }
 }

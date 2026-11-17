@@ -1496,6 +1496,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
     function drawExtension(f) {
         if (!WORLD.span || sceneryHidden || !imgLoaded || sceneryImg.naturalWidth === 0) return;
+        if (SPAN && SPAN.glass === false) return; // glass off: the sky alone continues over the sides
         const L = LIGHT;
         if (!L) return;
         const { RX, RW, OX, OY } = WORLD;
