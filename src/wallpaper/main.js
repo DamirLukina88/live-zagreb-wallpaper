@@ -218,7 +218,7 @@ function apply(w) {
     canvas.classList.add('wx-ready');
     overlay.classList.add('wx-ready');
     bg.show();
-    renderPanel(panelData(w, code, day, now), settings.lang);
+    renderCard(w, code, day, now);
 }
 
 // What the card shows, with the test overrides applied (wind direction, the next rain or snow)
@@ -235,6 +235,26 @@ function testSoon(spec, offsetSec, nowMs) {
         const t = new Date(start + 900000 + offsetSec * 1000).toISOString().slice(0, 16);
         return { t, rain: wet && kind === 'rain' ? 1 : 0, snow: wet && kind === 'snow' ? 1 : 0 };
     });
+}
+// The city setting was not found: the card says so, under the name as typed, until a city is
+// found (the minute's redraw must not bring the previous city back); the last city's numbers are
+// hidden, as they would read as the new one's
+let cityMissing = false;
+function renderCard(w, code, day, now) {
+    renderPanel(panelData(w, code, day, now), settings.lang);
+    const $ = id => document.getElementById(id);
+    for (const id of ['wp-temp', 'wp-icon']) if ($(id)) $(id).style.visibility = cityMissing ? 'hidden' : '';
+    if ($('wp-forecast-list')) $('wp-forecast-list').style.display = cityMissing ? 'none' : '';
+    if (!cityMissing) return;
+    if ($('wp-city')) $('wp-city').textContent = settings.city;
+    if ($('wp-cond')) $('wp-cond').textContent = tr('weather_not_found', settings.lang);
+    for (const id of ['wp-wind', 'wp-soon', 'wp-sun-row']) if ($(id)) $(id).hidden = true;
+}
+function rerender() {
+    if (!weather) return;
+    const now = settings.clock || new Date();
+    const code = settings.wx !== null ? settings.wx : weather.weathercode;
+    renderCard(weather, code, isDayAt(now, weather.latitude, weather.longitude), now);
 }
 function panelData(w, code, day, now) {
     const off = typeof w.utc_offset_seconds === 'number' ? w.utc_offset_seconds : 3600;
@@ -275,13 +295,14 @@ async function refresh() {
         const w = await fetchWeather(settings.city);
         if (seq !== fetchSeq) return;
         retries = 0;
+        cityMissing = false;
         apply(w);
     } catch (err) {
         if (seq !== fetchSeq) return;
         console.warn('Weather fetch error:', err);
         if (err && err.message === 'City not found') {
-            const cond = document.getElementById('wp-cond');
-            if (cond) cond.textContent = tr('weather_not_found', settings.lang);
+            cityMissing = true;
+            rerender();
             return;
         }
         const wait = RETRY_MS[Math.min(retries, RETRY_MS.length - 1)];
@@ -298,7 +319,7 @@ function tick() {
         const code = settings.wx !== null ? settings.wx : weather.weathercode;
         const day = isDayAt(now, weather.latitude, weather.longitude);
         bg.setWeather(code, day, weather.windspeed);
-        renderPanel(panelData(weather, code, day, now), settings.lang); // "rain in 40 min" counts down
+        renderCard(weather, code, day, now); // "rain in 40 min" counts down
     }
     if (Date.now() - lastFetch >= REFETCH_MS) refresh();
 }
@@ -333,11 +354,7 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 }
 
 onSettingsChange((s, changed) => {
-    if (changed.includes('lang') && weather) {
-        const now = settings.clock || new Date();
-        const code = settings.wx !== null ? settings.wx : weather.weathercode;
-        renderPanel(panelData(weather, code, isDayAt(now, weather.latitude, weather.longitude), now), s.lang);
-    }
+    if (changed.includes('lang')) rerender();
     if (changed.includes('lang') || changed.includes('host')) showUpdate();
     if (changed.includes('city')) { retries = 0; refresh(); }
     if (changed.includes('layout')) applyLayout();

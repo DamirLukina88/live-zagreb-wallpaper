@@ -55,12 +55,17 @@ export async function fetchWeather(city = 'Zagreb') {
     const daily = json.daily || {};
     const hourly = json.hourly || {};
 
-    // precipitation in the current hour, to tell a real thunderstorm from a dry one
+    // Hourly sums are stamped at the END of their hour ("preceding hour sum"): at 19:45 the stamp
+    // 19:00 is the rain from 18:00 to 19:00, and the hour under way is the stamp 20:00. Instant
+    // values (cloud cover, snow depth) are read at the stamp nearest to now.
     let precip = 0;
     const hour = (cur.time || '').substring(0, 13);
     const hi = hourly.time ? hourly.time.findIndex(t => t.startsWith(hour)) : -1;
     const at = (list, i) => (Array.isArray(list) && i >= 0 && typeof list[i] === 'number' ? list[i] : null);
-    if (at(hourly.precipitation, hi) !== null) precip = hourly.precipitation[hi];
+    const underWay = at(hourly.precipitation, hi + 1) !== null ? hi + 1 : hi;
+    const nearest = hi >= 0 && Number((cur.time || '').substring(14, 16)) >= 30 && hi + 1 < hourly.time.length ? hi + 1 : hi;
+    // precipitation in the hour under way, to tell a real thunderstorm from a dry one
+    if (at(hourly.precipitation, underWay) !== null) precip = hourly.precipitation[underWay];
     let code = cur.weathercode ?? 0;
     if (code === 95 && precip === 0) code = 17; // dry thunderstorm
 
@@ -98,8 +103,8 @@ export async function fetchWeather(city = 'Zagreb') {
         windspeed: cur.windspeed ?? 10,
         // null = not known (an old cached answer): the scene then behaves as before
         windDir: typeof cur.winddirection === 'number' ? cur.winddirection : null,
-        cloudPct: at(hourly.cloud_cover, hi),
-        snowDepthCm: at(hourly.snow_depth, hi) === null ? null : Math.round(hourly.snow_depth[hi] * 1000) / 10,
+        cloudPct: at(hourly.cloud_cover, nearest),
+        snowDepthCm: at(hourly.snow_depth, nearest) === null ? null : Math.round(hourly.snow_depth[nearest] * 1000) / 10,
         dryness,
         soon,
         utc_offset_seconds: json.utc_offset_seconds ?? 0,
