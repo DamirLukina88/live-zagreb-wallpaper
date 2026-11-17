@@ -228,9 +228,18 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const sm = seasonMix(e);
         const artA = seasonArt(sm.from), artB = sm.t > 0 ? seasonArt(sm.to) : artA;
         const season = sm.t > 0 ? `${sm.from}>${sm.to}@${sm.t.toFixed(3)}|${artB === sceneryImg}` : sm.from;
-        const plain = sm.t > 0 ? blendedArt(artA, artB, sm.t) : artA;
+        // Wallpaper: after about two days without rain the terrace dries (the user's dry-floor
+        // paintings, bg/zagreb-<season>-dry.webp): it fades from the wet to the dry painting
+        const dry = dryLevel();
+        const dryA = dry > 0 ? dryArt(sm.from) : null, dryB = dry > 0 && sm.t > 0 ? dryArt(sm.to) : dryA;
+        const wetArt = sm.t > 0 ? blendedArt(artA, artB, sm.t) : artA;
+        // only once the dry paintings and the real season paintings (not the spring stand-in) are in
+        const dryOk = !!(dryA && dryB) && (artA !== sceneryImg || sm.from === 'spring');
+        const plain = dry > 0 && dryOk
+            ? mixArt('dry', wetArt, sm.t > 0 ? mixArt('dryseason', dryA, dryB, sm.t) : dryA, dry)
+            : wetArt;
         const art = wx.lying > 0.02 ? snowyArt(plain, wx.lying, season) : plain;
-        const key = [Math.round(alt * 10), wx.key, W, H, Math.floor(e.date.getTime() / 60000), season, artA === sceneryImg, ENV.tempC, WORLD.key].join('|');
+        const key = [Math.round(alt * 10), wx.key, W, H, Math.floor(e.date.getTime() / 60000), season, artA === sceneryImg, ENV.tempC, WORLD.key, dryOk ? dry : 0].join('|');
         if (LIGHT && LIGHT.key === key) return LIGHT;
         const RH = WORLD.RH;
 
@@ -262,6 +271,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // 0 = wet, 1 = mostly ice.
         const cold = typeof ENV.tempC === 'number' ? clamp((1 - ENV.tempC) / 5) : 0;
         L.lying = wx.lying || 0;
+        L.dry = dryOk ? dry : 0;
         // Ice sheets only for frost and freezing rain: with snow on the ground or falling, none
         const snowy = L.lying > 0.02 || wx.snow > 0;
         L.frost = snowy ? 0 : clamp(Math.max(L.snowCover * 0.9, cold));
@@ -516,6 +526,45 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         snowCache.key = key;
         return c;
     }
+    // Dry-floor paintings (wallpaper only), loaded the first time the terrace is dry
+    const DRY_ART = {};
+    function dryArt(season) {
+        let img = DRY_ART[season];
+        if (!img) {
+            img = DRY_ART[season] = new Image();
+            img.onload = () => kick();
+            img.src = `${ART_BASE}zagreb-${season}-dry.webp?v=${ART_VERSION}`;
+        }
+        return img.complete && img.naturalWidth > 0 ? img : null;
+    }
+    // How dry the terrace looks, 0 wet .. 1 dry, in steps of a tenth. Wet while it rains, snows or
+    // after rain; ENV.dryness (0..1 over about two days without rain) from the weather service.
+    function dryLevel() {
+        if (!wallpaper() || typeof ENV.dryness !== 'number') return 0;
+        const wx = S.wx;
+        if (wx.rain > 0 || wx.snow > 0 || wx.hail > 0) return 0;
+        // the floor starts to look dry from about half-way, fully dry at the end
+        return Math.round(clamp((ENV.dryness - 0.35) / 0.65) * 10) / 10;
+    }
+    // Any two paintings blended, cached by name (kept apart from the season blend's cache)
+    const mixCache = {};
+    function mixArt(name, a, b, t) {
+        const key = [a.src || a.width, b.src || b.width, t.toFixed(3), name === 'dry' ? blendCache.key : ''].join('|');
+        const hit = mixCache[name];
+        if (hit && hit.key === key) return hit.canvas;
+        const c = (hit && hit.canvas) || document.createElement('canvas');
+        c.width = a.naturalWidth || a.width;
+        c.height = a.naturalHeight || a.height;
+        const g = c.getContext('2d');
+        g.globalAlpha = 1 - t;
+        g.drawImage(a, 0, 0, c.width, c.height);
+        g.globalCompositeOperation = 'lighter';
+        g.globalAlpha = t;
+        g.drawImage(b, 0, 0, c.width, c.height);
+        mixCache[name] = { key, canvas: c };
+        return c;
+    }
+
     // The season's artwork, or the spring original while it is still loading (or if it fails)
     function seasonArt(season) {
         let img = SEASON_ART[season];
@@ -906,7 +955,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             ctx.beginPath();
             ctx.rect(0, floorY, W, H - floorY);
             ctx.clip();
-            ctx.globalAlpha = k * floodK * (wet ? 0.26 : 0.34) * (1 - 0.95 * (LIGHT ? LIGHT.lying : 0)); // none in snow
+            ctx.globalAlpha = k * floodK * (wet ? 0.26 : 0.34) * (1 - 0.95 * Math.max(LIGHT ? LIGHT.lying : 0, LIGHT ? LIGHT.dry || 0 : 0)); // none in snow or on a dry floor
             ctx.translate(0, 2 * (geom.drawY + MIRROR_FAR * geom.drawH));
             ctx.scale(1, -1);
             ctx.drawImage(flood, geom.ox, geom.oy);
@@ -935,7 +984,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 const shimmer = Math.sin(t * (wet ? 2.6 : 0.7) + i * 2.3);
                 const rx = x + shimmer * (wet ? 0.9 : 0.35) * sc;
                 const frost = LIGHT ? LIGHT.frost : 0; // ice reflects less sharply than water
-                const snowed = LIGHT ? LIGHT.lying : 0; // snow on the floor hides the mirror
+                const snowed = Math.max(LIGHT ? LIGHT.lying : 0, LIGHT ? 0.85 * (LIGHT.dry || 0) : 0); // snow or a dry floor: no mirror
                 const ra = a * (wet ? 0.3 : 0.4) * (0.85 + 0.15 * shimmer) * (1 - 0.45 * frost) * (1 - 0.9 * snowed);
                 const sw = Math.max(rw, 1.4) * 1.3, sh = Math.max(rh, rw) * (wet ? 3.4 : 2.6);
                 ctx.save();
