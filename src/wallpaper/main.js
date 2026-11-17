@@ -30,6 +30,7 @@ const bg = createZagrebBackground(canvas, overlay, {
 bg.setEnabled(true);
 if (settings.clock) bg.setTestClock(settings.clock);
 if (settings.season) bg.setTestSeason(settings.season);
+if (settings.seasonmix) bg.setTestSeason(settings.seasonmix);
 
 // ------------------------------------------------------------------
 // Multi-display: span geometry and where the weather card goes
@@ -143,7 +144,13 @@ function apply(w) {
     const now = settings.clock || new Date();
     const day = isDayAt(now, w.latitude, w.longitude);
     const code = settings.wx !== null ? settings.wx : w.weathercode;
-    bg.setEnv({ lat: w.latitude, lon: w.longitude, utcOffsetSeconds: w.utc_offset_seconds, tempC: w.temperature });
+    const pick = (test, real) => (test !== null && test !== undefined ? test : real ?? null);
+    bg.setEnv({
+        lat: w.latitude, lon: w.longitude, utcOffsetSeconds: w.utc_offset_seconds, tempC: w.temperature,
+        cloudPct: pick(settings.cloud, w.cloudPct), windDir: pick(settings.winddir, w.windDir),
+        snowDepthCm: pick(settings.snow, w.snowDepthCm), dryness: pick(settings.dry, w.dryness),
+        advent: settings.advent
+    });
     bg.setWeather(code, day, w.windspeed);
     canvas.classList.add('wx-ready');
     overlay.classList.add('wx-ready');

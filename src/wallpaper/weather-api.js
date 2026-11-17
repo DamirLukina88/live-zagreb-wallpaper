@@ -40,7 +40,7 @@ async function geocode(city) {
 
 export async function fetchWeather(city = 'Zagreb') {
     const geo = await geocode(city);
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current_weather=true&hourly=precipitation&daily=weathercode,temperature_2m_max,temperature_2m_min,sunrise,sunset&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current_weather=true&hourly=precipitation,cloud_cover,snow_depth&minutely_15=precipitation,snowfall&forecast_minutely_15=8&past_days=2&daily=weathercode,temperature_2m_max,temperature_2m_min,sunrise,sunset&timezone=auto`;
     const res = await fetchJson(url);
     if (!res.ok) throw new Error(`Forecast failed: HTTP ${res.status}`);
     const json = await res.json();
@@ -50,13 +50,34 @@ export async function fetchWeather(city = 'Zagreb') {
 
     // precipitation in the current hour, to tell a real thunderstorm from a dry one
     let precip = 0;
-    if (hourly.time && Array.isArray(hourly.precipitation)) {
-        const hour = (cur.time || '').substring(0, 13);
-        const i = hourly.time.findIndex(t => t.startsWith(hour));
-        if (i !== -1 && typeof hourly.precipitation[i] === 'number') precip = hourly.precipitation[i];
-    }
+    const hour = (cur.time || '').substring(0, 13);
+    const hi = hourly.time ? hourly.time.findIndex(t => t.startsWith(hour)) : -1;
+    const at = (list, i) => (Array.isArray(list) && i >= 0 && typeof list[i] === 'number' ? list[i] : null);
+    if (at(hourly.precipitation, hi) !== null) precip = hourly.precipitation[hi];
     let code = cur.weathercode ?? 0;
     if (code === 95 && precip === 0) code = 17; // dry thunderstorm
+
+    // The request asks for two past days (for the terrace's dryness), so today is not the first day
+    const today = (cur.time || '').substring(0, 10);
+    const d0 = Math.max(0, (daily.time || []).indexOf(today));
+    const days = list => (list || []).slice(d0, d0 + 3);
+
+    // How dry the terrace is: 0 just rained .. 1 no rain for about two days (faster when warm)
+    let dryness = null;
+    if (hi >= 0 && Array.isArray(hourly.precipitation)) {
+        let since = 48; // hours since the last hour with measurable rain
+        for (let k = 0; k <= 48 && hi - k >= 0; k++) {
+            if ((hourly.precipitation[hi - k] || 0) >= 0.1) { since = k; break; }
+        }
+        const warm = Math.max(0.6, Math.min(1.6, ((cur.temperature ?? 12) + 8) / 20));
+        dryness = Math.max(0, Math.min(1, since * warm / 48));
+    }
+
+    // Precipitation in the next two hours, in 15-minute steps (for the card's "rain soon" line)
+    const m15 = json.minutely_15 || {};
+    const soon = (m15.time || []).slice(0, 8).map((t, i) => ({
+        t, rain: (m15.precipitation || [])[i] || 0, snow: (m15.snowfall || [])[i] || 0
+    }));
 
     const data = {
         city: geo.name,
@@ -68,14 +89,20 @@ export async function fetchWeather(city = 'Zagreb') {
         precipitation: precip,
         is_day: cur.is_day ?? 1,
         windspeed: cur.windspeed ?? 10,
+        // null = not known (an old cached answer): the scene then behaves as before
+        windDir: typeof cur.winddirection === 'number' ? cur.winddirection : null,
+        cloudPct: at(hourly.cloud_cover, hi),
+        snowDepthCm: at(hourly.snow_depth, hi) === null ? null : Math.round(hourly.snow_depth[hi] * 1000) / 10,
+        dryness,
+        soon,
         utc_offset_seconds: json.utc_offset_seconds ?? 0,
         daily: {
-            time: (daily.time || []).slice(0, 3),
-            weathercode: (daily.weathercode || []).slice(0, 3),
-            temperature_2m_max: (daily.temperature_2m_max || []).slice(0, 3),
-            temperature_2m_min: (daily.temperature_2m_min || []).slice(0, 3),
-            sunrise: (daily.sunrise || []).slice(0, 3),
-            sunset: (daily.sunset || []).slice(0, 3)
+            time: days(daily.time),
+            weathercode: days(daily.weathercode),
+            temperature_2m_max: days(daily.temperature_2m_max),
+            temperature_2m_min: days(daily.temperature_2m_min),
+            sunrise: days(daily.sunrise),
+            sunset: days(daily.sunset)
         },
         fetchedAt: Date.now()
     };

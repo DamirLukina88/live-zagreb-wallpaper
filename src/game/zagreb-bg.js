@@ -90,7 +90,10 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     const octx = overlay.getContext('2d');
     const mq = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
     // Where the weather is and how cold (set by weather.js); the test panel can pin the clock or season
-    const ENV = { lat: null, lon: null, utcOffsetSeconds: null, tempC: null };
+    // Wallpaper only (null = not known, the scene then behaves as in the game): cloudPct 0..100,
+    // windDir degrees the wind comes from, snowDepthCm lying snow, dryness 0 wet .. 1 dry,
+    // advent true/false to force the Advent look on or off (null = by the calendar)
+    const ENV = { lat: null, lon: null, utcOffsetSeconds: null, tempC: null, cloudPct: null, windDir: null, snowDepthCm: null, dryness: null, advent: null };
     const TEST = { clock: null, season: null };
     // A holiday look paints its own scene on top (src/holiday.js); the terrace then steps aside
     // and only the sky, sun, moon, clouds and weather are drawn here
@@ -206,9 +209,11 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const { W, H, wx } = f;
         const e = env();
         const alt = SUN.sunPosition(e.date, e.lat, e.lon).altitude;
-        const season = seasonFor(e);
-        const art = seasonArt(season);
-        const key = [Math.round(alt * 10), wx.key, W, H, Math.floor(e.date.getTime() / 60000), season, art === sceneryImg, ENV.tempC, WORLD.key].join('|');
+        const sm = seasonMix(e);
+        const artA = seasonArt(sm.from), artB = sm.t > 0 ? seasonArt(sm.to) : artA;
+        const season = sm.t > 0 ? `${sm.from}>${sm.to}@${sm.t.toFixed(3)}|${artB === sceneryImg}` : sm.from;
+        const art = sm.t > 0 ? blendedArt(artA, artB, sm.t) : artA;
+        const key = [Math.round(alt * 10), wx.key, W, H, Math.floor(e.date.getTime() / 60000), season, artA === sceneryImg, ENV.tempC, WORLD.key].join('|');
         if (LIGHT && LIGHT.key === key) return LIGHT;
         const RH = WORLD.RH;
 
@@ -329,14 +334,52 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // ------------------------------------------------------------------
     const SEASONS = ['winter', 'spring', 'summer', 'autumn'];
     const SEASON_ART = { spring: sceneryImg };
-    function seasonFor(e) {
-        if (TEST.season && SEASONS.includes(TEST.season)) return TEST.season;
-        // The month where the weather is, not where the device is
-        const month = typeof ENV.utcOffsetSeconds === 'number'
-            ? new Date(e.date.getTime() + ENV.utcOffsetSeconds * 1000).getUTCMonth()
-            : e.date.getMonth();
-        const north = SEASONS[Math.floor(((month + 1) % 12) / 3)]; // Dec-Feb winter, Mar-May spring, ...
-        return e.lat < 0 ? SEASONS[(SEASONS.indexOf(north) + 2) % 4] : north;
+    // Wallpaper: seasons do not flip on the 1st of a month. Each one arrives on a date typical for
+    // Zagreb and the two paintings cross-fade over three weeks around it, a step a day (the user's
+    // choice, 2026-11-17). South of the equator the calendar is shifted by half a year.
+    // TEST.season: 'autumn', or 'autumn,winter,0.5' for a fixed blend.
+    const SEASON_STARTS = [['spring', 2, 20], ['summer', 5, 1], ['autumn', 9, 8], ['winter', 10, 25]]; // month (0-based), day
+    const SEASON_FADE_DAYS = 21;
+    function seasonMix(e) {
+        if (TEST.season) {
+            const p = String(TEST.season).split(',');
+            if (p.length === 3 && SEASONS.includes(p[0]) && SEASONS.includes(p[1])) return { from: p[0], to: p[1], t: clamp(Number(p[2]) || 0) };
+            if (SEASONS.includes(p[0])) return { from: p[0], to: p[0], t: 0 };
+        }
+        // The date where the weather is, not where the device is
+        const offMs = typeof ENV.utcOffsetSeconds === 'number' ? ENV.utcOffsetSeconds * 1000 : -e.date.getTimezoneOffset() * 60000;
+        const local = new Date(e.date.getTime() + offMs);
+        let day = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) / 86400000;
+        if (e.lat < 0) day += 182;
+        const year = new Date(day * 86400000).getUTCFullYear();
+        const lead = Math.floor(SEASON_FADE_DAYS / 2); // the fade starts this many days before the date
+        let cur = null;
+        for (const y of [year - 1, year]) {
+            SEASON_STARTS.forEach(([name, m, d], i) => {
+                const c = Date.UTC(y, m, d) / 86400000;
+                if (day >= c - lead && (!cur || c > cur.c)) cur = { name, c, i };
+            });
+        }
+        const t = clamp((day - (cur.c - lead)) / SEASON_FADE_DAYS);
+        if (t >= 1) return { from: cur.name, to: cur.name, t: 0 };
+        return { from: SEASON_STARTS[(cur.i + 3) % 4][0], to: cur.name, t };
+    }
+    // Two paintings blended exactly, colour and cut-out outline alike (bare branches fade in)
+    const blendCache = { key: '', canvas: null };
+    function blendedArt(a, b, t) {
+        const key = [a.src, b.src, t.toFixed(3)].join('|');
+        if (blendCache.key === key) return blendCache.canvas;
+        const c = blendCache.canvas || (blendCache.canvas = document.createElement('canvas'));
+        c.width = a.naturalWidth; // also clears a reused canvas
+        c.height = a.naturalHeight;
+        const g = c.getContext('2d');
+        g.globalAlpha = 1 - t;
+        g.drawImage(a, 0, 0);
+        g.globalCompositeOperation = 'lighter';
+        g.globalAlpha = t;
+        g.drawImage(b, 0, 0, c.width, c.height);
+        blendCache.key = key;
+        return c;
     }
     // The season's artwork, or the spring original while it is still loading (or if it fails)
     function seasonArt(season) {
@@ -1814,7 +1857,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             // The clock to the whole minute, so displays redrawn a moment apart show the same sky
             const wall = Math.floor((performance.timeOrigin + performance.now()) / 60000) * 60;
             const L = computeLight(fw);
-            const key = [L.key, wall, S.W, S.H, sceneryHidden, imgLoaded, L.art.naturalWidth > 0].join('|');
+            const key = [L.key, wall, S.W, S.H, sceneryHidden, imgLoaded].join('|');
             if (BG.key !== key || !BG.out) {
                 const b0 = stats ? performance.now() : 0;
                 buildBackground(fw, L, wall);

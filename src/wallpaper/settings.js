@@ -31,6 +31,12 @@ function readHash() {
         clock: p.get('clock') || null,
         wx: p.has('wx') ? parseInt(p.get('wx'), 10) : null,
         season: p.get('season') || null,
+        seasonmix: p.get('seasonmix') || null,
+        cloud: num(p.get('cloud')),
+        winddir: num(p.get('winddir')),
+        snow: num(p.get('snow')),
+        dry: num(p.get('dry')),
+        advent: p.has('advent') ? p.get('advent') === '1' : null,
         power: p.get('power') || null,
         host: p.get('host') || null,
         any: raw.length > 0,
@@ -155,6 +161,14 @@ export const settings = {
     clock: fromHash.clock ? new Date(fromHash.clock) : null,
     wx: fromHash.wx !== null && !isNaN(fromHash.wx) ? fromHash.wx : null,
     season: fromHash.season || null,
+    // more test overrides: seasonmix=autumn,winter,0.5  cloud=0..100  winddir=0..360 (from)
+    // snow=<cm lying>  dry=0..1  advent=1|0
+    seasonmix: fromHash.seasonmix,
+    cloud: fromHash.cloud,
+    winddir: fromHash.winddir,
+    snow: fromHash.snow,
+    dry: fromHash.dry,
+    advent: fromHash.advent,
     power: fromHash.power === 'battery' || fromHash.power === 'ac' ? fromHash.power : null,
     // host package version (#host=kde-1.2.0); hosted: opened by a wallpaper host, not typed into a browser
     host: fromHash.host,
