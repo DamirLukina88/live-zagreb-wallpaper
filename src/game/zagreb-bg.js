@@ -405,6 +405,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // Two paintings blended exactly, colour and cut-out outline alike (bare branches fade in)
     const blendCache = { key: '', canvas: null };
     function blendedArt(a, b, t) {
+        // A painting still loading has no size yet: use the other one meanwhile (a 0x0 blend would
+        // make every later drawImage throw, and the key would keep it after the load)
+        if (!a.naturalWidth || !b.naturalWidth) return a.naturalWidth ? a : b;
         const key = [a.src, b.src, t.toFixed(3)].join('|');
         if (blendCache.key === key) return blendCache.canvas;
         const c = blendCache.canvas || (blendCache.canvas = document.createElement('canvas'));
@@ -549,7 +552,10 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // Any two paintings blended, cached by name (kept apart from the season blend's cache)
     const mixCache = {};
     function mixArt(name, a, b, t) {
-        const key = [a.src || a.width, b.src || b.width, t.toFixed(3), name === 'dry' ? blendCache.key : ''].join('|');
+        // As in blendedArt: a painting still loading has no size, and a 0x0 result would be kept
+        const size = x => x.naturalWidth || x.width || 0;
+        if (!size(a) || !size(b)) return size(a) ? a : b;
+        const key =[a.src || a.width, b.src || b.width, t.toFixed(3), name === 'dry' ? blendCache.key : ''].join('|');
         const hit = mixCache[name];
         if (hit && hit.key === key) return hit.canvas;
         const c = (hit && hit.canvas) || document.createElement('canvas');
@@ -935,7 +941,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         if (k <= 0.01) return;
         const { ctx, t, wx, W, H } = f;
         const sc = geom.drawW / 1200;
-        const tonight = Math.floor(Date.now() / 86400000);
+        const tonight = Math.floor((env().date.getTime() + (typeof ENV.utcOffsetSeconds === 'number' ? ENV.utcOffsetSeconds * 1000 : 0) - 12 * 3600000) / 86400000); // changes at noon, local
         const haze = 1 + wx.fog * 1.2; // fog spreads the glow
 
         const floorY = geom.drawY + FLOOR_TOP * geom.drawH;
@@ -1710,7 +1716,10 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             else if (lastHadRain && Math.random() < 0.20) rainbowActiveUntil = now + 3600 * 1000;
             if (possible && now < rainbowActiveUntil) targetRainbow = 0.85 * (0.5 + 0.5 * L.cs);
             lastHadRain = wx.rain > 0.15;
-            f.st.rainbowAlpha = (f.st.rainbowAlpha || 0) + (targetRainbow - (f.st.rainbowAlpha || 0)) * Math.min(1, f.dt * 1.5);
+            // Wallpaper: the sky is redrawn once a minute, often with no time passing (dt 0), so the
+            // bow takes its strength at once; the game eases it in
+            const ease = wallpaper() ? 1 : Math.min(1, f.dt * 1.5);
+            f.st.rainbowAlpha = (f.st.rainbowAlpha || 0) + (targetRainbow - (f.st.rainbowAlpha || 0)) * ease;
             drawRainbow(f, L, f.st.rainbowAlpha);
         },
 
@@ -2370,6 +2379,36 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         S.anim = null;
     }
 
+    // One bad frame (e.g. an image half loaded) must neither stop the animation nor reach the page
+    // that asked for a redraw (the weather card would not update)
+    let fails = 0, retryTimer = null;
+    function safeFrame(dt, playing) {
+        try {
+            frame(dt, playing);
+            fails = 0;
+        } catch (err) {
+            console.warn('Frame failed:', err);
+            // A frame that stopped half-way can leave a clip or a transform behind (save() without
+            // restore()): the next one starts from clean drawing state. Only the visible canvas
+            // keeps a picture, so it is redrawn even while paused.
+            const reset = c => {
+                const g = c.getContext('2d');
+                if (typeof g.reset === 'function') g.reset();
+                else c.width = c.width; // eslint-disable-line no-self-assign
+            };
+            for (const c of [canvas, BG.work, sheetCanvas, lightsBuf]) if (c) reset(c);
+            ctx.imageSmoothingEnabled = true;
+            if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+            S.blank = true;
+            // Try again soon (a still picture is not redrawn until the next minute otherwise),
+            // backing off from one second to a minute if it keeps failing
+            fails++;
+            if (!retryTimer && !S.dead) {
+                retryTimer = setTimeout(() => { retryTimer = null; kick(); }, Math.min(60000, 1000 * 2 ** (fails - 1)));
+            }
+        }
+    }
+
     function loop(now) {
         S.anim = null;
         if (S.dead || !S.enabled) return;
@@ -2380,16 +2419,16 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         if (wallpaper() && getScale(lowRes()) !== S.scale) resize(true);
         // Paused or hidden: draw nothing more, but never leave a cleared (empty or half) canvas
         if (S.paused || document.hidden) {
-            if (S.blank) frame(0, false);
+            if (S.blank) safeFrame(0, false);
             return;
         }
         if (reduced()) {
-            frame(0, false); // one still picture
+            safeFrame(0, false); // one still picture
             return;
         }
         if (still()) {
             // One picture; no time passes, and nothing is scheduled until the page calls again
-            frame(0, false);
+            safeFrame(0, false);
             return;
         }
         const ms = wpFrameMs() || FRAME_MS;
@@ -2398,7 +2437,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // was due (not after it was drawn), so the average rate is the rate asked for
         if (elapsed >= ms - 8) {
             S.last = Number.isFinite(elapsed) && elapsed < ms * 2 ? S.last + ms : now;
-            frame(Number.isFinite(elapsed) ? Math.min(elapsed, 100) / 1000 : 0, isPlaying());
+            safeFrame(Number.isFinite(elapsed) ? Math.min(elapsed, 100) / 1000 : 0, isPlaying());
             if (still()) {
                 // The fade just ended: draw the clean, sharp still picture and stop
                 loop(now);
@@ -2464,6 +2503,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // { view: {x,y,w,h}, desk: {w,h}, scene: {x,y,w,h} } in CSS pixels (see SPAN)
         setLayout(span) {
             SPAN = span || null;
+            // The cached background holds this display's place on the desktop and the side glass,
+            // neither of which is in its key: rebuild it now, not at the next minute
+            BG.key = '';
             resize(false);
             seedClouds();
             kick();
@@ -2476,6 +2518,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // Stop for good and let another background use the canvases
         dispose() {
             S.dead = true;
+            clearTimeout(retryTimer);
             stopTimers();
             window.removeEventListener('resize', onResize);
             document.removeEventListener('visibilitychange', kick);

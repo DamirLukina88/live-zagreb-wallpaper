@@ -62,8 +62,9 @@ async function detectScreens() {
 }
 
 // Lively's span: one window over all displays. Even without permission to read the displays,
-// the browser knows the primary display's size and where this window starts relative to it, so the
-// scene can sit exactly on the primary display and every other part becomes the sides.
+// the browser knows one display: window.screen is the display that holds most of the window (in a
+// span the largest, usually the primary), with its corner in the same desktop coordinates as the
+// window's screenX/screenY. The scene sits exactly on it and every other part becomes the sides.
 function windowSpans() {
     const sw = window.screen && window.screen.width, sh = window.screen && window.screen.height;
     if (!sw || !sh) return false;
@@ -72,9 +73,14 @@ function windowSpans() {
 }
 function primaryRect() {
     if (!windowSpans()) return null;
-    const sw = window.screen.width, sh = window.screen.height;
-    const x = -(window.screenX || 0), y = -(window.screenY || 0);
-    // the primary display must lie inside this window, or the numbers are not usable
+    const s = window.screen, sw = s.width, sh = s.height;
+    // Its corner: availLeft/availTop, which move past a taskbar on the left or top edge. The primary
+    // display's corner is the desktop's 0,0, so a corner that close to 0,0 is taken as exactly that.
+    let left = typeof s.availLeft === 'number' ? s.availLeft : 0;
+    let top = typeof s.availTop === 'number' ? s.availTop : 0;
+    if (Math.abs(left) < sw / 4 && Math.abs(top) < sh / 4) left = top = 0;
+    const x = left - (window.screenX || 0), y = top - (window.screenY || 0);
+    // that display must lie inside this window, or the numbers are not usable
     if (x < -2 || y < -2 || x + sw > window.innerWidth + 2 || y + sh > window.innerHeight + 2) return null;
     return { x, y, w: sw, h: sh };
 }
@@ -116,14 +122,14 @@ function showDisplayInfo() {
     if (!box) {
         box = document.createElement('pre');
         box.id = 'wp-displayinfo';
-        box.style.cssText = 'position:fixed;left:24px;top:24px;z-index:9;margin:0;padding:8px 10px;font:12px monospace;color:#e6f0ff;background:rgba(0,0,0,.72);border-radius:8px;pointer-events:none;white-space:pre';
+        box.style.cssText = 'position:fixed;left:24px;top:24px;z-index:8000;margin:0;padding:8px 10px;font:12px monospace;color:#e6f0ff;background:rgba(0,0,0,.72);border-radius:8px;pointer-events:none;white-space:pre';
         document.body.appendChild(box);
     }
     const sp = spanConfig();
     const r = o => (o ? `${Math.round(o.x)},${Math.round(o.y)} ${Math.round(o.w)}x${Math.round(o.h)}` : '-');
     box.textContent = [
         `window   ${window.innerWidth}x${window.innerHeight} at ${window.screenX},${window.screenY}  dpr ${window.devicePixelRatio}`,
-        `primary  ${window.screen.width}x${window.screen.height}  extended ${window.screen.isExtended ?? '?'}`,
+        `screen   ${window.screen.width}x${window.screen.height}  avail ${window.screen.availLeft ?? '?'},${window.screen.availTop ?? '?'} ${window.screen.availWidth}x${window.screen.availHeight}  extended ${window.screen.isExtended ?? '?'}`,
         `displays ${detected ? detected.map(d => r(d) + (d.primary ? '*' : '')).join(' | ') : 'not readable'}`,
         `span     ${sp ? 'yes' : 'no'}  scene ${sp ? r(sp.scene) : '-'}  glass ${settings.glass ? 'on' : 'off'}`,
         `layout   ${settings.layout}  slots ${settings.slots}  slot ${settings.slot}`
@@ -225,7 +231,8 @@ function testSoon(spec, offsetSec, nowMs) {
     return Array.from({ length: 8 }, (_, i) => {
         const start = first + i * 900000;
         const wet = until ? start < change : start >= change - 450000 && start > nowMs - 900000 && i > 0; // nearest 15-min step
-        const t = new Date(start + offsetSec * 1000).toISOString().slice(0, 16);
+        // stamped at the quarter's end, as Open-Meteo does (see soonText)
+        const t = new Date(start + 900000 + offsetSec * 1000).toISOString().slice(0, 16);
         return { t, rain: wet && kind === 'rain' ? 1 : 0, snow: wet && kind === 'snow' ? 1 : 0 };
     });
 }

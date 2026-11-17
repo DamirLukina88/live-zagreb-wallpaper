@@ -6,6 +6,11 @@ import org.kde.kirigami as Kirigami
 Kirigami.FormLayout {
     id: root
 
+    // Plasma hands every wallpaper settings page these two; without them it logs
+    // "Cannot assign to non-existent property" each time the dialog opens
+    property var configDialog
+    property var wallpaperConfiguration
+
     property alias cfg_City: cityField.text
     property string cfg_Language
     property string cfg_Quality

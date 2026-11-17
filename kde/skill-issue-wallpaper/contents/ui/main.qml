@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Window
 import QtWebEngine
 import org.kde.plasma.plasmoid
+import org.kde.kwindowsystem
 import org.kde.taskmanager as TaskManager
 
 WallpaperItem {
@@ -9,7 +10,7 @@ WallpaperItem {
 
     // This plugin's version (the same as metadata.json; the build checks it). The page compares it
     // with the version it needs and shows "plugin update available" on the weather card if it is older.
-    readonly property string hostVersion: "1.3.1"
+    readonly property string hostVersion: "1.3.2"
     readonly property string quality: root.configuration.Quality === "low" ? "low" : "auto"
     readonly property int fps: Math.max(5, Math.min(30, Number(root.configuration.FrameRate) || 15))
     readonly property string onlineUrl: "https://damirlukina88.github.io/live-zagreb-wallpaper/"
@@ -144,19 +145,24 @@ WallpaperItem {
     // ------------------------------------------------------------------
     // Pause while fullscreen or maximized windows cover this display (or any display, by setting)
     // ------------------------------------------------------------------
+    // This wallpaper's own display. Read here, on the wallpaper item: inside TasksModel (not an item)
+    // Screen would mean the primary display, and every display would pause for the primary's windows.
+    readonly property rect ownScreen: Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
+
     TaskManager.VirtualDesktopInfo { id: desktopInfo }
     TaskManager.ActivityInfo { id: activityInfo }
 
     TaskManager.TasksModel {
         id: tasks
         groupMode: TaskManager.TasksModel.GroupDisabled
-        screenGeometry: Qt.rect(Screen.virtualX, Screen.virtualY, Screen.width, Screen.height)
+        screenGeometry: root.ownScreen
         filterByScreen: (root.configuration.PauseRule || "screen") !== "all"
         virtualDesktop: desktopInfo.currentDesktop
         filterByVirtualDesktop: true
         activity: activityInfo.currentActivity
         filterByActivity: true
-        filterNotMinimized: true
+        // Hide minimized windows (filterNotMinimized would do the opposite: keep only minimized ones)
+        filterMinimized: true
 
         // Roles change in place when a window is maximized or goes fullscreen, so watch the
         // model's signals rather than only its count
@@ -170,9 +176,12 @@ WallpaperItem {
     property bool isCovered: false
 
     function computeCovered() {
+        // "Show desktop" / "Peek at desktop" hides windows without minimizing them: the wallpaper is in view
+        if (KWindowSystem.showingDesktop) return false;
         for (var i = 0; i < tasks.count; ++i) {
             var idx = tasks.index(i, 0);
             if (!tasks.data(idx, TaskManager.AbstractTasksModel.IsWindow)) continue;
+            if (tasks.data(idx, TaskManager.AbstractTasksModel.IsMinimized)) continue;
             if (tasks.data(idx, TaskManager.AbstractTasksModel.IsFullScreen)
                 || tasks.data(idx, TaskManager.AbstractTasksModel.IsMaximized)) {
                 return true;
@@ -188,6 +197,12 @@ WallpaperItem {
     }
 
     onIsCoveredChanged: pushPaused()
+    onOwnScreenChanged: coverCheck.restart()
+
+    Connections {
+        target: KWindowSystem
+        function onShowingDesktopChanged() { coverCheck.restart(); }
+    }
 
     WebEngineView {
         id: web

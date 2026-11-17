@@ -34,21 +34,28 @@ export function windText(dirDeg, kmh, lang) {
 
 // The next change in rain or snow within two hours, from 15-minute steps:
 //   soon: [{ t: 'YYYY-MM-DDTHH:MM' city-local, rain: mm, snow: cm }, ...]
+// Open-Meteo stamps each step at its END ("preceding 15 minutes sum"): the step at 18:00 is the
+// rain that falls from 17:45 to 18:00.
 // Returns '' when nothing changes. nowMs: now; offsetSec: the city's UTC offset.
+const QUARTER_MS = 15 * 60000;
 export function soonText(soon, nowMs, offsetSec, lang) {
     if (!Array.isArray(soon) || soon.length === 0 || typeof offsetSec !== 'number') return '';
-    const steps = soon.map(s => ({
-        start: Date.parse(s.t + ':00Z') - offsetSec * 1000,
-        wet: (s.rain || 0) >= 0.1 || (s.snow || 0) >= 0.1,
-        snow: (s.snow || 0) >= 0.1,
-        t: s.t
-    })).filter(s => Number.isFinite(s.start) && s.start + 15 * 60000 > nowMs);
+    const steps = soon.map(s => {
+        const end = Date.parse(s.t + ':00Z') - offsetSec * 1000;
+        return {
+            start: end - QUARTER_MS, end,
+            wet: (s.rain || 0) >= 0.1 || (s.snow || 0) >= 0.1,
+            snow: (s.snow || 0) >= 0.1
+        };
+    }).filter(s => Number.isFinite(s.end) && s.end > nowMs); // the quarter under way, then the next ones
     if (steps.length === 0) return '';
     const nowWet = steps[0].wet;
     const next = steps.find(s => s.wet !== nowWet);
     if (!next) return ''; // no change in the next two hours
     if (nowWet) {
-        return str(lang, steps[0].snow ? 'snow_until' : 'rain_until').replace('{t}', next.t.slice(11, 16));
+        // it stops when the first dry quarter begins (city-local clock time)
+        const until = new Date(next.start + offsetSec * 1000).toISOString().slice(11, 16);
+        return str(lang, steps[0].snow ? 'snow_until' : 'rain_until').replace('{t}', until);
     }
     const min = Math.max(0, Math.round((next.start - nowMs) / 300000) * 5);
     if (min < 10) return str(lang, next.snow ? 'snow_soon' : 'rain_soon');

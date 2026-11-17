@@ -20,8 +20,10 @@ const ASSETS = [
 
 self.addEventListener('install', (event) => {
     event.waitUntil(
+        // 'reload': straight from the server. GitHub Pages lets the browser keep files for 10 minutes,
+        // so two deploys within that time would otherwise store the previous app.js under the new name
         caches.open(CACHE_NAME)
-            .then((cache) => cache.addAll(ASSETS))
+            .then((cache) => cache.addAll(ASSETS.map((url) => new Request(url, { cache: 'reload' }))))
             .then(() => self.skipWaiting())
     );
 });

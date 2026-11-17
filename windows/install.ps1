@@ -64,4 +64,4 @@ Write-Host ""
 Write-Host "Done! If Lively asks to confirm importing the wallpaper, click OK." -ForegroundColor Green
 Write-Host "Updating from an older version: the new package is imported as a new entry." -ForegroundColor Yellow
 Write-Host "In Lively's library, right-click the old 'Skill Issue: Zagreb Weather' entry and delete it." -ForegroundColor Yellow
-Write-Host "To change City, Language, or Sharp mode: right-click the wallpaper in Lively -> Customise." -ForegroundColor Gray
+Write-Host "To change City, Language, Quality or the span layout: right-click the wallpaper in Lively -> Customise." -ForegroundColor Gray

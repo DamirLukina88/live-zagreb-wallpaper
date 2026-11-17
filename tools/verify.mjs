@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connect, serve, launch, sleep } from './cdp.mjs';
+import { MIN_HOST, hostOutdated } from '../src/wallpaper/version.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WEB = path.join(ROOT, 'web');
@@ -38,8 +39,15 @@ for (const k of Object.keys(props)) ok(settingsJs.includes(`case '${k}':`), `set
 const xml = read('kde/skill-issue-wallpaper/contents/config/main.xml');
 const cfg = read('kde/skill-issue-wallpaper/contents/ui/config.qml');
 for (const m of xml.matchAll(/<entry name="(\w+)"/g)) ok(cfg.includes(`cfg_${m[1]}`), `config.qml has no cfg_${m[1]} for main.xml entry ${m[1]}`);
-const minHost = /MIN_HOST = '([\d.]+)'/.exec(read('src/wallpaper/version.js'))?.[1];
-ok(minHost && minHost.localeCompare(version, undefined, { numeric: true }) <= 0, `version.js MIN_HOST ${minHost} is newer than the package ${version}`);
+for (const h of ['kde', 'lively']) {
+    const min = MIN_HOST[h];
+    ok(typeof min === 'string' && min.localeCompare(version, undefined, { numeric: true }) <= 0, `version.js MIN_HOST.${h} ${min} is missing or newer than the package ${version}`);
+    if (typeof min !== 'string') continue;
+    // this release's own package never gets the notice; one just below the minimum does
+    ok(!hostOutdated(`${h}-${version}`, true), `version.js: ${h}-${version} would be told to update`);
+    const [a, b, c] = min.split('.').map(Number);
+    if (c > 0) ok(hostOutdated(`${h}-${a}.${b}.${c - 1}`, true), `version.js: ${h}-${a}.${b}.${c - 1} would not be told to update`);
+}
 
 // ------------------------------------------------------------------
 console.log('2/4 QML');
