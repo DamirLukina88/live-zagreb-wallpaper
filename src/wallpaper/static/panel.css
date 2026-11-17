@@ -165,6 +165,31 @@ html, body {
     text-shadow: 0 0 6px rgba(246, 194, 49, 0.3);
 }
 
+/* Wind, under the conditions */
+.wp-wind {
+    color: #9fb3c8;
+    font-size: 6px;
+    line-height: 1.6;
+}
+.wp-wind[hidden] {
+    display: none;
+}
+
+/* Rain or snow in the next two hours */
+.wp-soon {
+    margin-bottom: 12px;
+    padding: 7px 10px;
+    font-size: 7px;
+    color: #9fd3ff;
+    background-color: rgba(30, 60, 100, 0.35);
+    border: 2px solid #3b5878;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+.wp-soon[hidden] {
+    display: none;
+}
+
 /* Sunrise & Sunset Row */
 .wm-sun-row {
     display: flex;

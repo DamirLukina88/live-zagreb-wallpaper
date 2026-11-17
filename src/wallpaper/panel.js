@@ -1,5 +1,6 @@
 // src/wallpaper/panel.js — the read-only weather card (top-right corner).
 import { I18N } from '../game/i18n.js';
+import { windText, soonText } from './strings.js';
 
 const isDrizzle = c => c >= 51 && c <= 57;
 const isRain = c => (c >= 61 && c <= 67) || (c >= 80 && c <= 82);
@@ -63,6 +64,22 @@ export function renderUpdateNotice(show, lang = 'hr') {
     el.textContent = show ? (UPDATE_TEXT[lang] || UPDATE_TEXT.hr) : '';
 }
 
+// The wallpaper's own lines: wind and the next rain or snow (strings.js)
+function renderExtras(w, lang) {
+    const wind = $('wp-wind'), soon = $('wp-soon');
+    if (wind) {
+        const text = windText(w.windDir, w.windspeed, lang);
+        wind.textContent = text ? `💨 ${text}` : '';
+        wind.hidden = !text;
+    }
+    if (soon) {
+        const now = w.now instanceof Date ? w.now.getTime() : Date.now();
+        const text = soonText(w.soon, now, w.utc_offset_seconds, lang);
+        soon.textContent = text ? `☂ ${text}` : '';
+        soon.hidden = !text;
+    }
+}
+
 export function renderPanel(w, lang = 'hr') {
     const panel = $('weather-panel');
     if (!panel) return;
@@ -79,6 +96,7 @@ export function renderPanel(w, lang = 'hr') {
     if (cond) cond.textContent = tr(condKey(w.weathercode), lang);
     if (ic) ic.textContent = icon(w.weathercode, !!w.is_day);
     if (temp) temp.textContent = formatTemp(w.temperature, lang);
+    renderExtras(w, lang);
 
     if (sunRow) {
         const hhmm = s => (typeof s === 'string' && s.length >= 16 ? s.slice(11, 16) : '');

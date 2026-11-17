@@ -37,6 +37,7 @@ function readHash() {
         snow: num(p.get('snow')),
         dry: num(p.get('dry')),
         advent: p.has('advent') ? p.get('advent') === '1' : null,
+        soontest: p.get('soontest') || null,
         power: p.get('power') || null,
         host: p.get('host') || null,
         any: raw.length > 0,
@@ -169,6 +170,8 @@ export const settings = {
     snow: fromHash.snow,
     dry: fromHash.dry,
     advent: fromHash.advent,
+    // soontest=rain:40 (rain starts in 40 min), rain-until:30 (it stops in 30 min), snow:20 ...
+    soontest: fromHash.soontest,
     power: fromHash.power === 'battery' || fromHash.power === 'ac' ? fromHash.power : null,
     // host package version (#host=kde-1.2.0); hosted: opened by a wallpaper host, not typed into a browser
     host: fromHash.host,

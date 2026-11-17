@@ -155,7 +155,30 @@ function apply(w) {
     canvas.classList.add('wx-ready');
     overlay.classList.add('wx-ready');
     bg.show();
-    renderPanel({ ...w, weathercode: code, is_day: day ? 1 : 0 }, settings.lang);
+    renderPanel(panelData(w, code, day, now), settings.lang);
+}
+
+// What the card shows, with the test overrides applied (wind direction, the next rain or snow)
+function testSoon(spec, offsetSec, nowMs) {
+    const m = /^(rain|snow)(-until)?:(\d+)$/.exec(spec || '');
+    if (!m) return null;
+    const [, kind, until, minStr] = m;
+    const change = nowMs + Number(minStr) * 60000;
+    const first = Math.floor(nowMs / 900000) * 900000;
+    return Array.from({ length: 8 }, (_, i) => {
+        const start = first + i * 900000;
+        const wet = until ? start < change : start >= change - 450000 && start > nowMs - 900000 && i > 0; // nearest 15-min step
+        const t = new Date(start + offsetSec * 1000).toISOString().slice(0, 16);
+        return { t, rain: wet && kind === 'rain' ? 1 : 0, snow: wet && kind === 'snow' ? 1 : 0 };
+    });
+}
+function panelData(w, code, day, now) {
+    const off = typeof w.utc_offset_seconds === 'number' ? w.utc_offset_seconds : 3600;
+    return {
+        ...w, weathercode: code, is_day: day ? 1 : 0, now,
+        windDir: settings.winddir !== null && settings.winddir !== undefined ? settings.winddir : w.windDir,
+        soon: testSoon(settings.soontest, off, now.getTime()) || w.soon
+    };
 }
 
 apply(cachedWeather() || {
@@ -203,7 +226,9 @@ function tick() {
     if (weather) {
         const now = settings.clock || new Date();
         const code = settings.wx !== null ? settings.wx : weather.weathercode;
-        bg.setWeather(code, isDayAt(now, weather.latitude, weather.longitude), weather.windspeed);
+        const day = isDayAt(now, weather.latitude, weather.longitude);
+        bg.setWeather(code, day, weather.windspeed);
+        renderPanel(panelData(weather, code, day, now), settings.lang); // "rain in 40 min" counts down
     }
     if (Date.now() - lastFetch >= REFETCH_MS) refresh();
 }
@@ -238,7 +263,11 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 }
 
 onSettingsChange((s, changed) => {
-    if (changed.includes('lang') && weather) renderPanel(weather, s.lang);
+    if (changed.includes('lang') && weather) {
+        const now = settings.clock || new Date();
+        const code = settings.wx !== null ? settings.wx : weather.weathercode;
+        renderPanel(panelData(weather, code, isDayAt(now, weather.latitude, weather.longitude), now), s.lang);
+    }
     if (changed.includes('lang') || changed.includes('host')) showUpdate();
     if (changed.includes('city')) { retries = 0; refresh(); }
     if (changed.includes('layout')) applyLayout();
