@@ -67,3 +67,12 @@ export async function launch() {
     return { port, stop() { proc.kill(); try { fs.rmSync(profile, { recursive: true, force: true }); } catch {} } };
 }
 
+
+// A wallpaper page blends in each minute's new picture over a few seconds (src/game/zagreb-bg.js),
+// so a check that a still picture draws nothing must not span a minute boundary: wait until the
+// next `ms` hold none (the page is opened after the boundary, so its first picture is of the new
+// minute and nothing is blended)
+export async function clearOfMinute(ms) {
+    const left = 60000 - (Date.now() % 60000);
+    if (left < ms) await sleep(left + 500);
+}

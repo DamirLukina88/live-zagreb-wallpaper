@@ -1933,6 +1933,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             S.prev = null; // a snapshot of another window size cannot be blended
             S.fade = 0;
         }
+        BG.blend = 0; // nor can the last minute's picture (BG exists before the first resize)
         S.st = {};
         // This scene needs no grain or vignette layer; keep the overlay canvas clear
         overlay.width = S.W;
@@ -2082,7 +2083,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // The vignettes and veils are applied here in floating point, with a fixed dither, instead of
     // as canvas gradients: over a dark sky a gradient covers only a few 8-bit levels and shows as
     // rings. The colour look is baked in afterwards, so the page needs no CSS filter.
-    const BG = { key: '', work: null, out: null, dither: null };
+    const BG = { key: '', work: null, out: null, old: null, blend: 0, wall: undefined, dither: null };
     function bgCanvas(name) {
         let c = BG[name];
         if (!c) {
@@ -2182,12 +2183,18 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // Clouds drift with the wind. The wallpaper takes their places from the wall clock instead
     // of the page's own running time: in a span every display runs its own page, and all of
     // them must agree so a cloud crosses from one to the next.
+    const CLOUD_CROSS_S = 3600, CLOUD_BLEND_S = 3;
     function placeClouds(fw, wall, dt) {
         const wx = fw.wx;
         const T = zagrebStyle.tune;
         const side = windSide();
         const dir = side === null ? 1 : side; // clouds and rain go the same way (wallpaper)
-        const speed = c => dir * (T.cloudBase + wx.wind * T.cloudWind) * c.d * (WORLD.RW / WORLD.DW);
+        // Wallpaper: the picture is redrawn once a minute, so the clouds drift very slowly, about an
+        // hour across the scene display (the user's choice, 2026-11-18): a little faster in wind,
+        // far ones slower. Each minute's step is blended in (CLOUD_BLEND_S, see frame()).
+        const speed = c => (wallpaper()
+            ? dir * (WORLD.RW / WORLD.DW) / CLOUD_CROSS_S * (0.6 + 0.5 * c.d) * (0.85 + 0.75 * wx.wind)
+            : dir * (T.cloudBase + wx.wind * T.cloudWind) * c.d * (WORLD.RW / WORLD.DW));
         const byClock = WORLD.span || wallpaper();
         for (const c of S.clouds) {
             if (byClock) {
@@ -2232,8 +2239,16 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             const key = [L.key, wall, S.W, S.H, sceneryHidden, imgLoaded].join('|');
             if (BG.key !== key || !BG.out) {
                 const b0 = stats ? performance.now() : 0;
+                // A new minute (the clouds have moved, the sun and sky with them): the new picture
+                // is blended in over a few seconds instead of replacing the old one at once. The
+                // two pictures swap canvases, so nothing is copied. Not on battery, not paused.
+                if (BG.out && BG.wall !== undefined && wall !== BG.wall && !animOff() && !reduced() && !S.paused) {
+                    [BG.old, BG.out] = [BG.out, BG.old];
+                    BG.blend = 1;
+                }
                 buildBackground(fw, L, wall);
                 BG.key = key;
+                BG.wall = wall;
                 if (stats) {
                     stats.builds = (stats.builds || 0) + 1;
                     stats.buildMs = performance.now() - b0;
@@ -2242,6 +2257,12 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             if (canvas.style.filter) canvas.style.filter = '';
             toCanvas();
             ctx.drawImage(BG.out, 0, 0);
+            if (BG.blend > 0 && BG.old) {
+                ctx.globalAlpha = BG.blend * BG.blend * (3 - 2 * BG.blend); // eased: starts and ends gently
+                ctx.drawImage(BG.old, 0, 0, S.W, S.H);
+                ctx.globalAlpha = 1;
+                BG.blend = Math.max(0, BG.blend - dtReal / CLOUD_BLEND_S);
+            }
             toWorld();
             zagrebStyle.scene(fw, 'live');
         } else {
@@ -2380,7 +2401,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         return wx.rain > 0 || wx.snow > 0 || wx.hail > 0 || !!wx.thunder;
     };
     // Something on screen moves every frame (not just the slow sky): precipitation, lightning, a fade
-    const moving = () => !animOff() && (precip() || S.fade > 0);
+    const moving = () => !animOff() && (precip() || S.fade > 0 || BG.blend > 0);
     const still = () => wallpaper() && !moving();
     // The canvas is low resolution only while precipitation is drawn every frame
     const lowRes = () => wallpaper() && !animOff() && precip();
@@ -2440,6 +2461,11 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         if (still()) {
             // One picture; no time passes, and nothing is scheduled until the page calls again
             safeFrame(0, false);
+            // ...unless that picture started a blend (a new minute): animate until it is done
+            if (!still()) {
+                S.last = now;
+                S.anim = requestAnimationFrame(loop);
+            }
             return;
         }
         const ms = wpFrameMs() || FRAME_MS;

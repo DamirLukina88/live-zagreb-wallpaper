@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { connect, serve, launch, sleep } from './cdp.mjs';
+import { connect, serve, launch, sleep, clearOfMinute } from './cdp.mjs';
 import { MIN_HOST, hostOutdated } from '../src/wallpaper/version.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -115,6 +115,7 @@ if (!failures) {
                 await page.send('Network.setBlockedURLs', { urls: ['*open-meteo.com*'] });
                 await page.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: dpr, mobile: false });
                 await page.send('Page.addScriptToEvaluateOnNewDocument', { source: 'globalThis.__WP_STATS__ = { frames: 0 };' });
+                await clearOfMinute(7000); // no minute blend inside the stillness check
                 await page.send('Page.navigate', { url: `${base}#city=Zagreb&fps=15&${sc.hash}` });
                 await sleep(3500);
                 const s = JSON.parse(await page.evaluate(`(async () => {

@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { connect, serve, launch, sleep } from './cdp.mjs';
+import { connect, serve, launch, sleep, clearOfMinute } from './cdp.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WEB = path.join(ROOT, 'web');
@@ -91,6 +91,7 @@ async function runCase(port, base, k) {
         await page.send('Network.setBlockedURLs', { urls: ['*open-meteo.com*'] });
         await page.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: dpr, mobile: false });
         await page.send('Page.addScriptToEvaluateOnNewDocument', { source: 'globalThis.__WP_STATS__ = { frames: 0, ms: 0, max: 0 };' });
+        await clearOfMinute(SETTLE_MS + MEASURE_MS + 2000); // no minute blend inside the measurement
         await page.send('Page.navigate', { url: base + hashOf(k) });
         await sleep(SETTLE_MS);
         const metrics = async () => Object.fromEntries((await page.send('Performance.getMetrics')).result.metrics.map(m => [m.name, m.value]));
