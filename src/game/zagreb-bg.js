@@ -473,7 +473,8 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const c = snowCache.canvas || (snowCache.canvas = document.createElement('canvas'));
         c.width = W;
         c.height = H;
-        const g = c.getContext('2d');
+        // read back on every change of snow: kept in main memory (see bgCanvas)
+        const g = c.getContext('2d', { willReadFrequently: true });
         g.drawImage(src, 0, 0, W, H);
         const img = g.getImageData(0, 0, W, H), px = img.data;
         const { field, fine } = snowField(W, H);
@@ -2084,7 +2085,12 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     const BG = { key: '', work: null, out: null, dither: null };
     function bgCanvas(name) {
         let c = BG[name];
-        if (!c) c = BG[name] = document.createElement('canvas');
+        if (!c) {
+            c = BG[name] = document.createElement('canvas');
+            // The work canvas is read back every rebuild (shadeAndDither): keep it in main memory
+            // (the attribute counts only on the first getContext call)
+            if (name === 'work') c.getContext('2d', { willReadFrequently: true });
+        }
         if (c.width !== S.W || c.height !== S.H) {
             c.width = S.W;
             c.height = S.H;
@@ -2452,11 +2458,15 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         S.anim = requestAnimationFrame(loop);
     }
 
+    // A change asks for a redraw at the next animation frame (it runs before the next paint, so a
+    // cleared canvas is never shown), and changes made together cost one frame: the page sets the
+    // layout, the place and the weather in one go at start-up and with every weather update, and
+    // each used to rebuild the whole background on its own
     function kick() {
         stopTimers();
         if (S.dead) return;
-        S.last = -Infinity; // draw now
-        loop(performance.now());
+        S.last = -Infinity; // draw at the next frame
+        S.anim = requestAnimationFrame(loop);
     }
 
     const onResize = () => { resize(false); kick(); };
