@@ -59,3 +59,23 @@ export function moonPass(date, lat, lon) {
     }
     return { up, rise: rise === null ? null : new Date(rise), set: set === null ? null : new Date(set) };
 }
+
+// Which way a point on the sky lies from another, as seen on the screen: the angle (radians,
+// canvas convention: 0 = right, PI/2 = down) of the direction from (alt, az) toward (alt2, az2),
+// with the zenith straight up. Used to turn the moon: its lit side faces the sun and its north
+// points to the celestial pole, as they really do tonight.
+export function skyAngle(alt, az, alt2, az2) {
+    const v = (a, z) => [Math.cos(a * RAD) * Math.sin(z * RAD), Math.cos(a * RAD) * Math.cos(z * RAD), Math.sin(a * RAD)];
+    const m = v(alt, az), t = v(alt2, az2);
+    const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+    // Up on the screen: the zenith, flattened onto the sky at the moon
+    let u = [-m[2] * m[0], -m[2] * m[1], 1 - m[2] * m[2]];
+    const ul = Math.hypot(u[0], u[1], u[2]);
+    if (ul < 1e-6) u = [0, 1, 0];
+    else u = u.map(c => c / ul);
+    // Right: facing the moon with the zenith up (west when facing south)
+    const right = [m[1] * u[2] - m[2] * u[1], m[2] * u[0] - m[0] * u[2], m[0] * u[1] - m[1] * u[0]];
+    const k = dot(t, m);
+    const d = [t[0] - k * m[0], t[1] - k * m[1], t[2] - k * m[2]];
+    return Math.atan2(-dot(d, u), dot(d, right));
+}

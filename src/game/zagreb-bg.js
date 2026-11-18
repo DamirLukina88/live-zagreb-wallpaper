@@ -18,7 +18,7 @@
 import * as SUN from './sun.js';
 import { ZAGREB_LIGHTS } from './zagreb-lights.js';
 import { codeToWx } from './weather-bg.js';
-import { moonPosition, moonPass } from './moon.js';
+import { moonPosition, moonPass, skyAngle } from './moon.js';
 
 const FRAME_MS = 1000 / 30;
 // Wallpaper: battery first. Every frame makes the desktop compositor repaint the whole display,
@@ -84,6 +84,8 @@ function rng(seed) {
     let s = (seed >>> 0) || 1;
     return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
 }
+// 0 below a, 1 above b (a > b turns it round), eased in between
+const smoothstep = (a, b, v) => { const t = clamp((v - a) / (b - a)); return t * t * (3 - 2 * t); };
 
 // opts.onArtError: called once if the painting cannot be loaded
 export function createZagrebBackground(canvas, overlay, opts = {}) {
@@ -239,7 +241,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             ? mixArt('dry', wetArt, sm.t > 0 ? mixArt('dryseason', dryA, dryB, sm.t) : dryA, dry)
             : wetArt;
         const art = wx.lying > 0.02 ? snowyArt(plain, wx.lying, season) : plain;
-        const key = [Math.round(alt * 10), wx.key, W, H, Math.floor(e.date.getTime() / 60000), season, artA === sceneryImg, ENV.tempC, WORLD.key, dryOk ? dry : 0].join('|');
+        const key = [Math.round(alt * 10), wx.key, W, H, Math.floor(e.date.getTime() / 60000), season, artA === sceneryImg, ENV.tempC, WORLD.key, dryOk ? dry : 0, moonAlbedo ? 1 : 0].join('|');
         if (LIGHT && LIGHT.key === key) return LIGHT;
         const RH = WORLD.RH;
 
@@ -286,12 +288,17 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         L.sunY = alt >= 0 ? L.horizonY - Math.pow(clamp(alt / 65), 0.8) * skyH * 0.86 : L.horizonY - alt * RH * 0.012;
         // Wallpaper: the moon is where it really is. It crosses the same arc as the sun, from its
         // rise to its set, at its real height, so some nights it is low, late or not up at all.
-        const mAlt = moonPosition(e.date, e.lat, e.lon).altitude;
+        const mPos = moonPosition(e.date, e.lat, e.lon), mAlt = mPos.altitude;
+        // Tonight's tilt: the lit side faces the sun, the moon's north points to the pole
+        const sPos = SUN.sunPosition(e.date, e.lat, e.lon);
+        L.moonLight = skyAngle(mAlt, mPos.azimuth, sPos.altitude, sPos.azimuth);
+        L.moonNorth = skyAngle(mAlt, mPos.azimuth, e.lat, 0);
+        L.moonAlt = mAlt;
         const pass = moonPass(e.date, e.lat, e.lon);
         const mp = pass.rise && pass.set ? (now - pass.rise.getTime()) / (pass.set.getTime() - pass.rise.getTime()) : 0.5;
         L.moonX = W * (0.24 + 0.62 * clamp(mp));
         // (a high winter full moon would leave the screen: the whole disc and its halo stay in view)
-        const moonTop = WORLD.RY + Math.min(WORLD.RW, RH) * 0.05 * 2.4;
+        const moonTop = WORLD.RY + Math.min(WORLD.RW, RH) * MOON_R * 5;
         L.moonY = Math.max(moonTop, L.horizonY - Math.pow(clamp(mAlt / 65), 0.8) * skyH * 0.86 - RH * 0.03);
         L.moonUp = clamp(mAlt / 3); // fades in as it clears the horizon
         L.lowSun = clamp(1 - Math.abs(alt - 1) / 9); // 1 around sunrise and sunset, 0 by mid-morning
@@ -320,7 +327,10 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         L.sunVis = clearView * clamp((alt + 1.5) / 1.5);
         L.sunCol = colorAt(SUN_COLOR, alt);
         L.moon = currentMoon(e.date);
-        L.moonVis = clearView * clamp((-alt - 2) / 4) * L.moonUp;
+        // Only a full moon is drawn (the user's choice, 2026-11-18): the nights around full
+        // moon, the whole disc lit; other nights there is no moon
+        L.moonFull = L.moon.lit >= MOON_FULL;
+        L.moonVis = L.moonFull ? clearView * clamp((-alt - 2) / 4) * L.moonUp : 0;
         L.moonA = L.moonVis * L.moon.lit;
         L.starVis = L.stars * (1 - clamp(wx.cloud / 0.7)) * (1 - wx.fog * 0.7);
         // Lamps and windows also come on under a dark daytime storm or thick fog
@@ -672,69 +682,97 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // Tonight's moon phase
     const currentMoon = date => SUN.moonPhase(date || new Date());
 
-    // Dark "seas" of the near side, as [x, y, radiusX, radiusY] in disc radii
-    const MARIA = [
-        [-0.42, -0.08, 0.30, 0.40], // Oceanus Procellarum
-        [-0.18, -0.42, 0.26, 0.22], // Mare Imbrium
-        [0.20, -0.34, 0.17, 0.17],  // Mare Serenitatis
-        [0.36, -0.10, 0.21, 0.17],  // Mare Tranquillitatis
-        [0.58, -0.22, 0.10, 0.12],  // Mare Crisium
-        [0.42, 0.18, 0.15, 0.13],   // Mare Fecunditatis
-        [-0.12, 0.34, 0.22, 0.16]   // Mare Nubium
-    ];
-
-    // The moon disc for a phase, drawn once per size and phase on its own small canvas. The unlit
-    // part is cut away so the sky shows through.
-    let moonCache = { key: '', canvas: null };
-    function moonDisc(r, m) {
-        const key = Math.round(r * 4) + '|' + Math.round(m.phase * 200);
-        if (moonCache.key === key) return moonCache.canvas;
-
-        const size = Math.ceil(r * 2 + 8);
+    // The near side, north up: NASA's LRO map (CGI Moon Kit, public domain) seen from the Earth,
+    // web/bg/moon-nearside.webp. Loaded on first use; until then no moon is drawn.
+    const MOON_FULL = 0.95; // lit share from which the moon counts as full (about four nights)
+    const MOON_R = 0.032; // disc radius as a share of the scene's smaller side
+    let moonPhoto = null, moonAlbedo = null;
+    function moonFace() {
+        if (moonAlbedo) return moonAlbedo;
+        if (!moonPhoto) {
+            moonPhoto = new Image();
+            moonPhoto.onload = () => kick();
+            moonPhoto.src = `${ART_BASE}moon-nearside.webp?v=${ART_VERSION}`;
+        }
+        if (!(moonPhoto.complete && moonPhoto.naturalWidth > 0)) return null;
+        const n = moonPhoto.naturalWidth;
         const c = document.createElement('canvas');
+        c.width = c.height = n;
+        const g = c.getContext('2d');
+        g.drawImage(moonPhoto, 0, 0);
+        const d = g.getImageData(0, 0, n, n).data, map = new Float32Array(n * n);
+        for (let i = 0; i < map.length; i++) map[i] = d[i * 4] / 180; // bright highlands about 1
+        return (moonAlbedo = { n, map });
+    }
+
+    // The moon disc, drawn pixel by pixel as a lit sphere (the unlit part is left transparent, so
+    // the sky shows through; a crescent also shows the faint earthshine). `light` is the screen
+    // angle toward the sun, `north` toward the celestial pole, `alt` the moon's altitude (low, it
+    // turns yellow). Kept until the size, phase or angles change noticeably.
+    let moonCache = { key: '', canvas: null };
+    // Drawn at twice the size and scaled down, so the limb and the terminator are smooth
+    const MOON_SS = 2;
+    function moonDisc(r0, m, light = 0, north = -Math.PI / 2, alt = 45) {
+        const r = r0 * MOON_SS;
+        const q = a => Math.round(a / 0.03);
+        const key = [Math.round(r * 2), Math.round(m.phase * 300), q(light), q(north), Math.round(clamp(alt, 0, 20))].join('|');
+        if (moonCache.key === key) return moonCache.canvas;
+        const face = moonFace();
+        if (!face) return null;
+
+        const size = Math.ceil(r * 2 + 4);
+        const c = moonCache.canvas || document.createElement('canvas');
         c.width = c.height = size;
         const g = c.getContext('2d');
+        const img = g.createImageData(size, size), px = img.data;
+        const fn = face.n, fm = face.map;
+        // bilinear look-up in the face, coordinates -1..1
+        const albedo = (fx, fy) => {
+            const u = clamp((fx + 1) / 2 * fn - 0.5, 0, fn - 1.001), v = clamp((fy + 1) / 2 * fn - 0.5, 0, fn - 1.001);
+            const i = u | 0, j = v | 0, a = u - i, b = v - j, k = j * fn + i;
+            return (fm[k] * (1 - a) + fm[k + 1] * a) * (1 - b) + (fm[k + fn] * (1 - a) + fm[k + fn + 1] * a) * b;
+        };
+        // Where the sun is, seen from the moon: E = 0 new, PI full; its direction on the disc
+        const E = m.phase * 2 * Math.PI, se = Math.abs(Math.sin(E));
+        const sx = se * Math.cos(light), sy = se * Math.sin(light), sz = -Math.cos(E);
+        // The face turned so its north points to the pole
+        const nx = Math.cos(north), ny = Math.sin(north); // north on screen
+        // Low in the sky the light comes through more air: warmer and dimmer
+        const low = Math.pow(clamp(1 - alt / 18), 1.6);
+        const warm = [1, 1 - 0.12 * low, 1 - 0.3 * low], dimLow = 1 - 0.2 * low;
+        const earth = 0.07 * clamp(1 - m.lit / 0.4); // earthshine on a crescent
         const cx = size / 2, cy = size / 2;
-
-        // Lit surface with soft darkening toward the limb
-        const body = g.createRadialGradient(cx - r * 0.15, cy - r * 0.15, r * 0.1, cx, cy, r);
-        body.addColorStop(0, '#f6f3e8');
-        body.addColorStop(0.75, '#e6e3d8');
-        body.addColorStop(1, '#c9c8c2');
-        g.fillStyle = body;
-        g.beginPath();
-        g.arc(cx, cy, r, 0, 6.2832);
-        g.fill();
-
-        g.save();
-        g.clip();
-        g.fillStyle = 'rgba(105, 112, 128, 0.24)';
-        for (const [x, y, rx, ry] of MARIA) {
-            g.beginPath();
-            g.ellipse(cx + x * r, cy + y * r, rx * r, ry * r, 0, 0, 6.2832);
-            g.fill();
+        for (let j = 0; j < size; j++) {
+            for (let i = 0; i < size; i++) {
+                const x = (i + 0.5 - cx) / r, y = (j + 0.5 - cy) / r;
+                const rr = x * x + y * y;
+                const edge = smoothstep(0, 3.2, (1 - Math.sqrt(rr)) * r + 0.8); // soft limb, about 1.5 px on screen
+                if (edge <= 0) continue;
+                const z = Math.sqrt(Math.max(0, 1 - rr));
+                // face coordinates: right = north turned a quarter clockwise, down = away from north
+                const fx = x * -ny + y * nx, fy = -(x * nx + y * ny);
+                const alb = albedo(fx * 0.985, fy * 0.985) || 0.8;
+                // Lommel-Seeliger: the full moon is evenly bright to the limb; the light falls
+                // off toward the terminator, which the crater-rough ground makes a little ragged
+                let mu0 = x * sx + y * sy + z * sz;
+                
+                const lit = mu0 > 0 ? Math.min(1.1, (2 * mu0) / (mu0 + z + 0.02)) * smoothstep(0, 0.14, mu0) : 0;
+                const b = alb * lit * dimLow;
+                const a = clamp(lit * 5);
+                const k = (j * size + i) * 4;
+                // a soft warm grey, not paper white: the sky around it is the brightest it gets
+                const R = 196 * warm[0], G = 194 * warm[1], B = 186 * warm[2];
+                // the dark side: only the earthshine, over the sky
+                const ea = earth * (0.6 + 0.4 * alb) * (1 - a);
+                const A = a + ea;
+                if (A <= 0.003) continue;
+                px[k] = Math.min(255, (R * b * a + 90 * alb * ea) / A);
+                px[k + 1] = Math.min(255, (G * b * a + 102 * alb * ea) / A);
+                px[k + 2] = Math.min(255, (B * b * a + 122 * alb * ea) / A);
+                px[k + 3] = Math.round(255 * A * edge);
+            }
         }
-        g.restore();
-
-        // Keep only the lit part: the outer half circle on the lit side plus the terminator,
-        // an ellipse that bulges toward the lit side for a crescent and away from it when gibbous.
-        if (m.lit < 0.995) {
-            const k = Math.abs(Math.cos(m.phase * 2 * Math.PI)); // terminator width, 0 at the quarters
-            g.save();
-            g.globalCompositeOperation = 'destination-in';
-            g.translate(cx, cy);
-            g.rotate(-0.35); // the moon rarely sits upright
-            if (!m.waxing) g.scale(-1, 1); // waning: lit on the left
-            try { g.filter = `blur(${Math.max(0.4, r * 0.05).toFixed(2)}px)`; } catch (_) {}
-            g.beginPath();
-            g.arc(0, 0, r + 4, -Math.PI / 2, Math.PI / 2, false);
-            g.ellipse(0, 0, Math.max(0.001, k * r), r + 4, 0, Math.PI / 2, -Math.PI / 2, m.lit < 0.5);
-            g.closePath();
-            g.fillStyle = '#000';
-            g.fill();
-            g.restore();
-        }
-
+        g.putImageData(img, 0, 0);
         moonCache = { key, canvas: c };
         return c;
     }
@@ -1066,17 +1104,26 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         const { ctx } = f;
         if (m.lit < 0.03) return; // new moon: nothing to see
 
-        // Halo: the fuller the moon, the wider and brighter
-        const haloR = p.r * (2.2 + 2.2 * m.lit);
-        const g = ctx.createRadialGradient(p.x, p.y, p.r * 0.6, p.x, p.y, haloR);
-        g.addColorStop(0, `rgba(205, 220, 250, ${(0.32 * m.lit).toFixed(3)})`);
-        g.addColorStop(0.45, `rgba(160, 190, 240, ${(0.10 * m.lit).toFixed(3)})`);
-        g.addColorStop(1, 'rgba(150, 185, 240, 0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(p.x - haloR, p.y - haloR, haloR * 2, haloR * 2);
-
-        const disc = moonDisc(p.r, m);
-        ctx.drawImage(disc, p.x - disc.width / 2, p.y - disc.height / 2);
+        const disc = moonDisc(p.r, SUN.moonFromPhase(0.5), LIGHT && LIGHT.moonLight, LIGHT && LIGHT.moonNorth, LIGHT ? LIGHT.moonAlt : 45);
+        if (!disc) return;
+        const dw = disc.width / MOON_SS;
+        ctx.save();
+        ctx.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(disc, p.x - dw / 2, p.y - dw / 2, dw, dw);
+        ctx.restore();
+        // Glare: the bright disc bleeds a little light over its own edge, as it does in the eye,
+        // so it sits in the sky instead of on it
+        const bloomR = p.r * 1.45;
+        const b = ctx.createRadialGradient(p.x, p.y, p.r * 0.85, p.x, p.y, bloomR);
+        b.addColorStop(0, 'rgba(200, 206, 218, 0.10)');
+        b.addColorStop(0.4, 'rgba(180, 192, 214, 0.035)');
+        b.addColorStop(1, 'rgba(190, 205, 230, 0)');
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = b;
+        ctx.fillRect(p.x - bloomR, p.y - bloomR, bloomR * 2, bloomR * 2);
+        ctx.restore();
     }
 
     // ------------------------------------------------------------------
@@ -1161,9 +1208,9 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 c.height = H;
                 return c;
             };
-            const body = mk(), shade = mk(), under = mk();
-            const gb = body.getContext('2d'), gs = shade.getContext('2d'), gu = under.getContext('2d');
-            const ib = gb.createImageData(W, H), is = gs.createImageData(W, H), iu = gu.createImageData(W, H);
+            const body = mk(), shade = mk(), under = mk(), rim = mk();
+            // First pass: coverage, how deep inside the cloud each point is, and how far down
+            const A = new Float32Array(W * H), T = new Float32Array(W * H), D = new Float32Array(W * H), TOP = new Float32Array(W * H);
             const fq = 5 / W; // the largest billows are about a fifth of the cloud wide
             for (let y = 0; y < H; y++) {
                 for (let x = 0; x < W; x++) {
@@ -1188,29 +1235,73 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                     const flat = smooth(baseY + H * 0.2, baseY - H * 0.12, y + (low - 0.5) * H * 0.2 + (soft - 0.5) * H * 0.12);
                     // Keep clear of the sprite's edges
                     const edge = smooth(0, W * 0.04, Math.min(x, W - 1 - x, y, H - 1 - y));
-                    // Lumpy on top, fuzzier toward the base
+                    // Sunlit crowns have a crisp, billowed edge; toward the base it frays into haze
                     const top = smooth(baseY + H * 0.05, baseY - H * 0.25, y);
-                    const rough = (n - 0.34) * (0.45 + 0.6 * top) + (soft - 0.5) * (0.9 - 0.45 * top);
-                    const alpha = smooth(-0.06, 0.42 - 0.2 * top, e + rough) * flat * edge;
+                    const rough = (n - 0.34) * (0.55 + 0.7 * top) + (soft - 0.5) * (0.9 - 0.55 * top);
+                    const v = e + rough;
+                    const alpha = smooth(-0.08, 0.44 - 0.18 * top, v) * flat * edge;
                     if (alpha <= 0.004) continue;
-                    const i = (y * W + x) * 4;
-                    ib.data[i] = ib.data[i + 1] = ib.data[i + 2] = 255;
-                    ib.data[i + 3] = Math.round(alpha * 255);
-
-                    // Shadow: one even gradient that grows toward the base. No patches and no dark
-                    // creases: on a soft cloud they read as dirty spots.
-                    const depth = clamp((y - colTop[x]) / Math.max(1, baseY + H * 0.1 - colTop[x]));
-                    const sh = 0.85 * smooth(0.2, 1.0, depth);
-                    is.data[i] = is.data[i + 1] = is.data[i + 2] = 255;
-                    is.data[i + 3] = Math.round(alpha * sh * 255);
-                    iu.data[i] = iu.data[i + 1] = iu.data[i + 2] = 255;
-                    iu.data[i + 3] = Math.round(alpha * smooth(0.62, 1.0, depth) * 255);
+                    const i = y * W + x;
+                    A[i] = alpha;
+                    T[i] = smooth(-0.05, 0.5, v) * flat;
+                    D[i] = clamp((y - colTop[x]) / Math.max(1, baseY + H * 0.1 - colTop[x]));
+                    TOP[i] = top;
+                }
+            }
+            // The depth field, blurred a little, is a height map: its slope gives each billow a
+            // rounded surface, lit from above, so the cloud has form instead of a flat fill
+            const Tb = new Float32Array(W * H), tmp = new Float32Array(W * H);
+            const rb = Math.max(1, Math.round(W / 128));
+            for (let pass = 0; pass < 2; pass++) {
+                const [src, dst, dx, dy] = pass ? [tmp, Tb, 0, W] : [T, tmp, 1, 0];
+                const step = dx + dy, len = pass ? H : W;
+                for (let o = 0; o < (pass ? W : H); o++) {
+                    const base = pass ? o : o * W;
+                    for (let k = 0; k < len; k++) {
+                        let sum = 0, cnt = 0;
+                        for (let q = -rb; q <= rb; q++) {
+                            const kk = k + q;
+                            if (kk < 0 || kk >= len) continue;
+                            sum += src[base + kk * step];
+                            cnt++;
+                        }
+                        dst[base + k * step] = sum / cnt;
+                    }
+                }
+            }
+            const gb = body.getContext('2d'), gs = shade.getContext('2d'), gu = under.getContext('2d'), gr = rim.getContext('2d');
+            const ib = gb.createImageData(W, H), is = gs.createImageData(W, H), iu = gu.createImageData(W, H), ir = gr.createImageData(W, H);
+            const slope = W / 40;
+            const lx = 0.28, ly = -0.82, lz = 0.5; // light from above and a little to the side
+            for (let y = 1; y < H - 1; y++) {
+                for (let x = 1; x < W - 1; x++) {
+                    const i = y * W + x, alpha = A[i];
+                    if (alpha <= 0.004) continue;
+                    const gx = (Tb[i + 1] - Tb[i - 1]) * slope, gy = (Tb[i + W] - Tb[i - W]) * slope;
+                    const lam = (-gx * lx - gy * ly + lz) / Math.sqrt(gx * gx + gy * gy + 1);
+                    const depth = D[i], top = TOP[i];
+                    // Shadow: the base is darker, and so is the side of each billow turned from the
+                    // light. Soft and broad, never dark lines in the creases.
+                    const form = smooth(0.62, -0.05, lam) * (0.35 + 0.55 * top);
+                    const sh = Math.min(0.9, 0.7 * smooth(0.25, 1.0, depth) + 0.55 * form);
+                    // Rim: the thin outer fringe, which glows when the sun or moon is behind it
+                    const thin = smooth(0.55, 0.05, Tb[i]);
+                    const k = i * 4;
+                    ib.data[k] = ib.data[k + 1] = ib.data[k + 2] = 255;
+                    ib.data[k + 3] = Math.round(alpha * 255);
+                    is.data[k] = is.data[k + 1] = is.data[k + 2] = 255;
+                    is.data[k + 3] = Math.round(alpha * sh * 255);
+                    iu.data[k] = iu.data[k + 1] = iu.data[k + 2] = 255;
+                    iu.data[k + 3] = Math.round(alpha * smooth(0.62, 1.0, depth) * 255);
+                    ir.data[k] = ir.data[k + 1] = ir.data[k + 2] = 255;
+                    ir.data[k + 3] = Math.round(alpha * thin * 255);
                 }
             }
             gb.putImageData(ib, 0, 0);
             gs.putImageData(is, 0, 0);
             gu.putImageData(iu, 0, 0);
-            return (cloudMasks[v] = { body, shade, under });
+            gr.putImageData(ir, 0, 0);
+            return (cloudMasks[v] = { body, shade, under, rim });
         }
     }
     // One tinted copy of a mask; the canvas is kept and re-coloured when the light changes
@@ -1227,12 +1318,29 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     }
     const CLOUD_TINT = { body: ['body', 'cloudLit'], shade: ['shade', 'cloudShade'], under: ['under', 'glow'], sheet: ['body', 'sheet'], haze: ['body', 'hor'] };
     const cloudCache = new Map(); // "variant|kind" -> { key, canvas }
-    function cloudSprite(L, variant, kind) {
+    // Far clouds are small on screen, which squeezes a mask's soft edge into a pixel or two: they
+    // use copies of the masks blurred once, so they stay as soft as the near ones
+    const softMasks = new Map();
+    function softMask(variant, name) {
+        const id = variant + '|' + name;
+        let c = softMasks.get(id);
+        if (c) return c;
+        const m = cloudMask(variant)[name];
+        c = document.createElement('canvas');
+        c.width = m.width;
+        c.height = m.height;
+        const g = c.getContext('2d');
+        try { g.filter = `blur(${Math.round(m.width / 64)}px)`; } catch (_) {}
+        g.drawImage(m, 0, 0);
+        softMasks.set(id, c);
+        return c;
+    }
+    function cloudSprite(L, variant, kind, soft = false) {
         const [mask, colour] = CLOUD_TINT[kind];
-        const id = variant + '|' + kind;
+        const id = variant + '|' + kind + (soft ? '|soft' : '');
         let hit = cloudCache.get(id);
         if (hit && hit.key === L[colour]) return hit.canvas;
-        hit = { key: L[colour], canvas: stamp(cloudMask(variant)[mask], L[colour], hit && hit.canvas) };
+        hit = { key: L[colour], canvas: stamp(soft ? softMask(variant, mask) : cloudMask(variant)[mask], L[colour], hit && hit.canvas) };
         cloudCache.set(id, hit);
         return hit.canvas;
     }
@@ -1703,7 +1811,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             if (L.moonVis > 0.02) {
                 ctx.save();
                 ctx.globalAlpha = L.moonVis;
-                drawMoon(f, { x: L.moonX, y: L.moonY, r: Math.min(f.RW, f.RH) * 0.05 }, L.moon);
+                drawMoon(f, { x: L.moonX, y: L.moonY, r: Math.min(f.RW, f.RH) * MOON_R }, L.moon);
                 ctx.restore();
             }
 
@@ -1754,7 +1862,10 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
         // Soft clouds lit by the hour: separate puffs in fair weather, one grey sheet with darker
         // patches when it is overcast, raining or stormy. Far clouds sit lower, smaller and paler.
-        cloud(f, c) {
+        // part: 'body' (the cloud's fill only), 'rest' (its shading) or both. Drawing every body
+        // first and then every cloud's shading melts overlapping clouds into one mass, instead
+        // of a front cloud's edge cutting a hard step across the one behind it.
+        cloud(f, c, part) {
             // Sizes follow the scene rectangle, so clouds are as big in a span as on one screen
             const { ctx, wx, RW: W, RH: H } = f;
             const L = LIGHT;
@@ -1764,7 +1875,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
             ctx.save();
             if (wx.cloud >= 0.9 || wx.fog > 0.4) {
-                if (c.far) { ctx.restore(); return; }
+                if (c.far || part === 'rest') { ctx.restore(); return; }
                 const w = W * (0.8 + 0.5 * c.s), h = w * 0.24;
                 // Snow comes from an even, pale sheet; rain a little more broken; storms heavy
                 ctx.globalAlpha = (wx.thunder ? 0.34 : (wx.snow > 0 || wx.fog > 0.4) ? 0.04 : wx.rain > 0 ? 0.11 : 0.12) * (0.55 + 0.45 * depth);
@@ -1783,8 +1894,8 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
                 // crowding just above the hills
                 // near clouds keep their size; far ones shrink but stretch wide and flat
                 const size = depth >= 0.45 ? 0.74 + 0.6 * (depth - 0.45) / 0.55 : 0.16 + 0.58 * Math.pow(depth / 0.45, 1.2);
-                w = c.s * Math.min(W * 0.34, H * 0.46) * size * (1 + 0.9 * clamp((0.5 - depth) / 0.5));
-                h = w * 0.5 * (0.32 + 0.68 * Math.min(1, depth / 0.6)) * (0.86 + 0.3 * ((c.seed % 53) / 53));
+                w = c.s * Math.min(W * 0.34, H * 0.46) * size * (1 + 0.3 * clamp((0.5 - depth) / 0.5));
+                h = w * 0.5 * (0.6 + 0.4 * Math.min(1, depth / 0.6)) * (0.86 + 0.3 * ((c.seed % 53) / 53));
                 y = L.horizonY - skyH * (0.03 + 0.8 * Math.pow(depth, 1.35)) + ((c.seed % 97) / 97 - 0.5) * skyH * 0.05 * depth - h * 0.6;
             } else {
                 w = c.s * Math.min(W * 0.34, H * 0.46) * (0.4 + 0.6 * depth);
@@ -1793,23 +1904,30 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             }
             ctx.translate(c.px, 0);
             if ((c.seed >> 3) & 1) ctx.scale(-1, 1);
+            // Far clouds are small on screen, which squeezes their soft edge into a pixel or two:
+            // a blur in step with their size keeps them as soft as the near ones (wallpaper only,
+            // where the picture is drawn once a minute)
+            const soft = persp && depth < 0.6;
             const x = -w / 2;
             const a = persp ? 0.62 + 0.33 * depth : 0.5 + 0.42 * depth;
-            ctx.globalAlpha = a;
-            ctx.drawImage(cloudSprite(L, variant, 'body'), x, y, w, h);
+            if (part !== 'rest') {
+                ctx.globalAlpha = a;
+                ctx.drawImage(cloudSprite(L, variant, 'body', soft), x, y, w, h);
+            }
+            if (part === 'body') { ctx.restore(); return; }
             // Far clouds show less of their own shadow (air flattens contrast)
             ctx.globalAlpha = a * 0.6 * (persp ? 0.35 + 0.65 * depth : 1);
-            ctx.drawImage(cloudSprite(L, variant, 'shade'), x, y, w, h);
+            ctx.drawImage(cloudSprite(L, variant, 'shade', soft), x, y, w, h);
             if (persp && depth < 0.85) {
                 // ...and take on the colour of the air near the horizon (at sunset, its glow)
-                ctx.globalAlpha = a * 0.75 * Math.pow(1 - depth, 1.4);
-                ctx.drawImage(cloudSprite(L, variant, 'haze'), x, y, w, h);
+                ctx.globalAlpha = a * 0.45 * Math.pow(1 - depth, 1.4);
+                ctx.drawImage(cloudSprite(L, variant, 'haze', soft), x, y, w, h);
             }
             // Low sun: the undersides nearest the sun catch its colour
             const warm = a * L.lowSun * L.cs * (0.35 + 0.65 * clamp(1 - Math.abs(c.px - L.sunX) / (W * 0.7)));
             if (warm > 0.02) {
                 ctx.globalAlpha = warm;
-                ctx.drawImage(cloudSprite(L, variant, 'under'), x, y, w, h);
+                ctx.drawImage(cloudSprite(L, variant, 'under', soft), x, y, w, h);
             }
             ctx.restore();
         },
@@ -2053,6 +2171,10 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // smaller layer loses nothing that can be seen.
     const SHEET_SCALE = 0.25;
     let sheetCanvas = null;
+    function drawCloudList(fw) {
+        for (const c of S.clouds) zagrebStyle.cloud(fw, c, 'body');
+        for (const c of S.clouds) zagrebStyle.cloud(fw, c, 'rest');
+    }
     function drawSheets(fw) {
         const q = SHEET_SCALE;
         const w = Math.max(1, Math.ceil(S.W * q)), h = Math.max(1, Math.ceil(S.H * q));
@@ -2165,7 +2287,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         zagrebStyle.sky(fb);
         placeClouds(fb, minuteWall, 0);
         if (fb.wx.cloud >= 0.9 || fb.wx.fog > 0.4) drawSheets(fb);
-        else for (const c of S.clouds) zagrebStyle.cloud(fb, c);
+        else drawCloudList(fb);
         drawExtension(fb);
         zagrebStyle.scene(fb, 'base');
         g.setTransform(1, 0, 0, 1, 0, 0);
@@ -2270,7 +2392,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             zagrebStyle.sky(fw);
             placeClouds(fw, WORLD.span ? Date.now() / 1000 : 0, dt);
             if (wx.cloud >= 0.9 || wx.fog > 0.4) drawSheets(fw);
-            else for (const c of S.clouds) zagrebStyle.cloud(fw, c);
+            else drawCloudList(fw);
             drawExtension(fw);
             zagrebStyle.scene(fw);
         }

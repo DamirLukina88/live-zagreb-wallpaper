@@ -14,6 +14,7 @@ const ASSETS = [
     './bg/zagreb-summer-dry.webp',
     './bg/zagreb-autumn-dry.webp',
     './bg/zagreb-winter-dry.webp',
+    './bg/moon-nearside.webp',
     './fonts/press-start-2p-latin.woff2',
     './fonts/press-start-2p-latin-ext.woff2'
 ];
