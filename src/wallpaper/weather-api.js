@@ -58,6 +58,12 @@ export async function fetchWeather(city = 'Zagreb') {
     // Hourly sums are stamped at the END of their hour ("preceding hour sum"): at 19:45 the stamp
     // 19:00 is the rain from 18:00 to 19:00, and the hour under way is the stamp 20:00. Instant
     // values (cloud cover, snow depth) are read at the stamp nearest to now.
+    // Cloud cover jumps from hour to hour in the model (0, 45, 19, 68 % ...): the hour nearest to
+    // now is averaged with the one before and after, so the sky does not empty out for an hour
+    const coverNow = (list, i) => {
+        const v = [i - 1, i, i + 1].map(k => at(list, k)).filter(x => x !== null);
+        return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null;
+    };
     let precip = 0;
     const hour = (cur.time || '').substring(0, 13);
     const hi = hourly.time ? hourly.time.findIndex(t => t.startsWith(hour)) : -1;
@@ -103,7 +109,7 @@ export async function fetchWeather(city = 'Zagreb') {
         windspeed: cur.windspeed ?? 10,
         // null = not known (an old cached answer): the scene then behaves as before
         windDir: typeof cur.winddirection === 'number' ? cur.winddirection : null,
-        cloudPct: at(hourly.cloud_cover, nearest),
+        cloudPct: coverNow(hourly.cloud_cover, nearest),
         snowDepthCm: at(hourly.snow_depth, nearest) === null ? null : Math.round(hourly.snow_depth[nearest] * 1000) / 10,
         dryness,
         soon,

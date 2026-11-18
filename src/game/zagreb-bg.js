@@ -131,7 +131,11 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
         // 10 % steps, so 20 % and 60 % look different; rain, snow, storms and fog keep their own
         // skies. Steps keep the clouds from reshuffling on every small change.
         if (code <= 3 && typeof ENV.cloudPct === 'number') {
-            wx.cloud = Math.round(clamp(ENV.cloudPct / 100) * 10) / 10;
+            // ...but never against the weather the card reports: "partly cloudy" always shows
+            // some clouds, "clear" no more than a few (the code and the hourly cover come from
+            // different model steps and often disagree)
+            const [lo, hi] = [[0, 0.1], [0.1, 0.4], [0.3, 0.7], [0.7, 1]][code];
+            wx.cloud = Math.round(clamp(ENV.cloudPct / 100, lo, hi) * 10) / 10;
             wx.dark = wx.cloud > 0.9 ? 0.15 : 0;
         }
         wx.key = code + '|' + (isDay ? 1 : 0) + '|' + wx.wind + '|' + wx.lying + '|' + wx.cloud;
