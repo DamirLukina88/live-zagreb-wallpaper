@@ -688,7 +688,7 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
 
     // The near side, north up: NASA's LRO map (CGI Moon Kit, public domain) seen from the Earth,
     // web/bg/moon-nearside.webp. Loaded on first use; until then no moon is drawn.
-    const MOON_FULL = 0.95; // lit share from which the moon counts as full (about four nights)
+    const MOON_FULL = 0.9; // lit share from which the moon is drawn full: about 3 days either side of full moon, about 6 nights a month (the user's choice, 2026-11-21)
     const MOON_R = 0.032; // disc radius as a share of the scene's smaller side
     let moonPhoto = null, moonAlbedo = null;
     function moonFace() {
