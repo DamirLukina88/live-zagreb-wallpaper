@@ -1,4 +1,4 @@
-// src/game/moon.js — where the moon really is (wallpaper only; the game keeps its moon).
+// src/game/moon.js — where the moon really is (the wallpaper's; sent to the game with push-game).
 // The usual low-precision almanac formulas (as in sun.js), good to a degree or so and a few
 // minutes of rise and set time, which is plenty for a background.
 

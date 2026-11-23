@@ -19,3 +19,4 @@ bench/shots/
 # config with Plasma settings backups
 extension-kit/
 .claude/
+bench/push-game/

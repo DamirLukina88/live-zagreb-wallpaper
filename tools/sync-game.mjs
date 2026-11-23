@@ -1,4 +1,5 @@
-// tools/sync-game.mjs — bring the game's background code into this repo.
+// tools/sync-game.mjs — bring a fix made in the game back into this repo. Rarely needed: the
+// wallpaper is the source of the background and sends its changes with tools/push-game.mjs.
 //
 //   npm run sync-game -- /path/to/the/game/repo
 //

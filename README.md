@@ -9,7 +9,7 @@ It reuses the game's Zagreb Cathedral terrace background, physical day/night sun
 
 ## Features
 
-- **Self-contained**: the game modules it reuses (`zagreb-bg.js`, `sun.js`, `zagreb-lights.js`, `weather-bg.js`, `i18n.js`) are copied into [`src/game/`](src/game/) from the game repo; `zagreb-bg.js` carries the wallpaper's additions (still picture and adaptive quality, span, pause, and the wallpaper's scene details: seasons, lying snow, clouds, wind, the town at night, Advent), and `moon.js` is the wallpaper's own.
+- **Self-contained, and the source of the background**: the background modules (`zagreb-bg.js`, `sun.js`, `moon.js`, `zagreb-lights.js`, `weather-bg.js`, `i18n.js`) live in [`src/game/`](src/game/) and the artwork in [`web/bg/`](web/bg/). The wallpaper is their source of truth: scene changes are made here first and sent to the game (Tegoba vještine) with `npm run push-game`. `zagreb-bg.js` also carries what only the wallpaper needs (still picture and adaptive quality, span, pause, glass side displays); the game keeps its own adaptations (no span, cloud shapes built in idle time for phones, its own minute timer).
 - **Multiple displays**: *Clone* (the whole scene on every display) or *Span* (one scene over all displays: the terrace and weather card on one display, the same sky, sun, moon, clouds and weather continuing across the others, which show frosted glass lit like the scene, or, with the glass switched off, the sky alone).
 - **Physical Day & Night Cycle**: Real astronomical sun altitude calculated from local time and city coordinates (smooth transitions through day, golden hour, blue hour, and night).
 - **Realistic Moon & Seasons**: the moon rises, crosses the sky and sets where it really is, in its real phase. The seasons arrive on dates typical for Zagreb (spring 20 March, summer 1 June, autumn 8 October, winter 25 November; half a year later south of the equator), and the paintings cross-fade over about three weeks.
@@ -47,7 +47,8 @@ Nothing built is committed. GitHub Actions builds on every push to `main`, runs 
 | `npm run verify` | manifests, versions, QML, security policy, render matrix (screenshots in `bench/shots/`) |
 | `npm run bench` | frame rate and draw cost for **every weather type** (see [Benchmark](#benchmark)) |
 | `npm run check` | build + verify + benchmark subset (what CI runs) |
-| `npm run sync-game -- <game repo>` | merges the game's current background code into `src/game/` (three-way, keeps the wallpaper's changes) |
+| `npm run push-game -- <game test repo> [--dry-run]` | sends the wallpaper's background changes since the last push to the game's **test** repo (`TEGOBA-VJESTINE-TEST-SERVER`, branch `test`): a three-way merge per file that keeps the game's own adaptations, plus changed `web/bg/` art. Never the live repo, never commits or deploys; refuses if those game files have uncommitted changes. A conflict leaves the game's file untouched and puts the merged file in `bench/push-game/`: resolve it, copy it into the game, then `--mark <file>`. `src/game/.pushed/` records what was last sent; commit it |
+| `npm run sync-game -- <game repo>` | the other way, rarely needed: merges a fix made in the game back into `src/game/` |
 
 **Releasing a host-package change** (QML, settings, Lively properties): set the new version in `package.json`, `kde/.../metadata.json`, `main.qml` (`hostVersion`) and `LivelyInfo.json` (`#host=`); the build refuses to run if they differ. Raise that host's minimum in `MIN_HOST` (`kde` or `lively`) in `src/wallpaper/version.js` if its older packages must be told to update, then tag `v<version>`.
 

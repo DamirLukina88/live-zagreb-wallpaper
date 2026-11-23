@@ -8,6 +8,7 @@
     "build": "node src/wallpaper/build.mjs",
     "bench": "node tools/bench.mjs",
     "sync-game": "node tools/sync-game.mjs",
+    "push-game": "node tools/push-game.mjs",
     "verify": "node tools/verify.mjs",
     "check": "npm run build && npm run verify && npm run bench -- --ci"
   },
