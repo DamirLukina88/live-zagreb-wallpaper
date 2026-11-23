@@ -17,7 +17,8 @@ const read = f => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const json = f => JSON.parse(read(f));
 
 let failures = 0;
-const fail = msg => { failures++; console.error(`  FAIL ${msg}`); };
+// On GitHub the reason also becomes an annotation, readable on the run page without the log
+const fail = msg => { failures++; console.error(`  FAIL ${msg}`); if (process.env.GITHUB_ACTIONS) console.log(`::error title=verify::${String(msg).replace(/\r?\n/g, " ")}`); };
 const ok = (cond, msg) => { if (!cond) fail(msg); };
 
 // ------------------------------------------------------------------
