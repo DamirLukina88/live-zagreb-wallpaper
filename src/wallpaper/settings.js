@@ -46,7 +46,9 @@ function readHash() {
         showCard: p.has('showcard') ? p.get('showcard') !== '0' : null,
         power: p.get('power') || null,
         host: p.get('host') || null,
-        any: raw.length > 0,
+        // Every KDE plugin before 1.2.0 (no #host=) sent sharp=; a link typed or shared into a
+        // browser does not, so its test settings (wx, clock...) do not make it a host
+        oldKde: p.has('sharp'),
         layout: p.get('layout') || null,
         view: rect(p.get('view')),
         desk: rect(p.get('desk'), 2),
@@ -206,7 +208,7 @@ export const settings = {
     power: fromHash.power === 'battery' || fromHash.power === 'ac' ? fromHash.power : null,
     // host package version (#host=kde-1.2.0); hosted: opened by a wallpaper host, not typed into a browser
     host: fromHash.host,
-    hosted: fromHash.any,
+    hosted: fromHash.oldKde,
     layout: (fromHash.layout || stored.layout) === 'span' ? 'span' : 'clone',
     view: fromHash.view,
     desk: fromHash.desk,

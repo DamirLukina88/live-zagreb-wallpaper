@@ -98,6 +98,7 @@ const SCENES = [
     { name: 'span-scene', hash: `wx=2&clock=2026-06-15T12:00:00&${host}&layout=span&view=0,0,1920,1080&desk=4179,1271&scene=0,0,1920,1080` },
     { name: 'span-side-glass', hash: `wx=2&clock=2026-06-15T12:00:00&${host}&${SPAN}`, size: [2259, 1271, 1.7], noCard: true },
     { name: 'english', hash: `wx=1&clock=2026-06-15T12:00:00&lang=en&${host}` },
+    { name: 'browser-link-no-notice', hash: 'wx=75&snow=20&advent=1&clock=2026-12-12T18:00:00', animated: true, notice: false },
     { name: 'old-plugin-notice', hash: 'wx=0&clock=2026-06-15T12:00:00&sharp=1', notice: true },
     { name: 'old-version-notice', hash: 'wx=0&clock=2026-06-15T12:00:00&host=kde-1.1.0', notice: true }
 ];

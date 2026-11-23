@@ -17,8 +17,9 @@ function older(a, b) {
     return false;
 }
 
-// host: the #host= value, or null. A page opened directly in a browser (no host, no wallpaper
-// settings in the address) is not a package and gets no notice.
+// host: the #host= value, or null. A page opened directly in a browser (no host, no old plugin's
+// sharp= in the address, no Lively callback) is not a package and gets no notice, even with test
+// settings such as wx= or clock= in the address.
 export function hostOutdated(host, inWallpaper) {
     if (!host) return !!inWallpaper;
     const m = /^(kde|lively)-(\d+(?:\.\d+){0,2})$/.exec(host);
