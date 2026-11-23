@@ -2530,7 +2530,8 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
             ctx.globalAlpha = S.fade;
             ctx.drawImage(S.prev, 0, 0, W, H);
             ctx.globalAlpha = 1;
-            S.fade -= dtReal / 1.2;
+            // (wallpaper: as slowly as the minute's blend, so a new cloud cover drifts in)
+            S.fade -= dtReal / (wallpaper() ? CLOUD_BLEND_S : 1.2);
             if (S.fade <= 0) S.prev = null;
         }
         // Nothing is worth showing until the painting itself has arrived

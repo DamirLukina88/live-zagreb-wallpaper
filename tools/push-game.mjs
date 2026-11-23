@@ -72,6 +72,24 @@ const parses = code => {
     try { transformSync(code, { loader: "js", format: "esm" }); return null; } catch (e) { return e.message.split("\n")[0]; }
 };
 
+// Names the merge's new lines use that the game's file never defines, such as a wallpaper-only
+// helper (wallpaper(), WORLD): the merged file would parse and then fail when that line runs.
+// Calls and CONSTANTS only; methods (.name) and the browser's own globals are fine.
+const KEYWORDS = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "new", "await", "super", "import", "export", "do", "else", "in", "of"]);
+const BROWSER = new Set(["requestAnimationFrame", "cancelAnimationFrame", "requestIdleCallback", "getComputedStyle", "matchMedia", "Image", "ImageData", "OffscreenCanvas", "Path2D", "DOMMatrix", "MutationObserver", "ResizeObserver", "IntersectionObserver", "NaN", "Infinity"]);
+const esc = n => n.replace(/\$/g, "\\$");
+function undefinedNames(before, merged) {
+    const old = new Set(before.split("\n"));
+    const added = merged.split("\n").filter(l => !old.has(l)).join("\n")
+        .replace(/\/\/.*$/gm, "").replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, '""');
+    const used = new Set([
+        ...[...added.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)].map(m => m[1]),
+        ...[...added.matchAll(/(?<![.\w$])([A-Z][A-Z0-9_]{2,})\b/g)].map(m => m[1])
+    ]);
+    return [...used].filter(n => !KEYWORDS.has(n) && !BROWSER.has(n) && typeof globalThis[n] === "undefined"
+        && !new RegExp(`(?:function\\*?|const|let|var|class)\\s+${esc(n)}\\b|[,{(]\\s*${esc(n)}\\s*[,)=}]|(?<![.\\w$])${esc(n)}\\s*\\([^)]*\\)\\s*\\{|import\\s*\\{[^}]*\\b${esc(n)}\\b|import\\s*\\*\\s*as\\s+${esc(n)}\\b`).test(merged));
+}
+
 let conflicts = 0, changed = 0;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "push-game-"));
 try {
@@ -107,6 +125,14 @@ try {
             fs.mkdirSync(OUT_DIR, { recursive: true });
             fs.copyFileSync(work, path.join(OUT_DIR, f));
             console.log(`${label} merged but does not parse (${err}): the game's file is untouched; see bench/push-game/${f}`);
+            continue;
+        }
+        const missing = undefinedNames(fs.readFileSync(target, "utf8"), merged);
+        if (missing.length) {
+            conflicts++;
+            fs.mkdirSync(OUT_DIR, { recursive: true });
+            fs.copyFileSync(work, path.join(OUT_DIR, f));
+            console.log(`${label} merged, but uses ${missing.join(", ")}, which the game does not define (wallpaper-only?):\n${" ".repeat(19)}the game's file is untouched. Adapt bench/push-game/${f} for the game (or keep the game's\n${" ".repeat(19)}file if the change does not apply there), copy it over, then run with --mark ${f}`);
             continue;
         }
         if (merged === fs.readFileSync(target, "utf8")) {
