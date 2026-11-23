@@ -850,26 +850,65 @@ export function createZagrebBackground(canvas, overlay, opts = {}) {
     // Wallpaper: on a sharp canvas (scale above 0.5) the windows would be hard one-pixel
     // rectangles and the floodlit walls would show the cut-out's edges. Both look right at half
     // resolution (the low-quality look, which the user prefers), so all the lights and their
-    // reflections are drawn on a half-resolution layer of the scene rectangle and scaled up.
+    // reflections are drawn on a half-resolution layer and scaled up.
+    // The layer covers only the box the lights, their glow and their reflections can reach (the
+    // town, the railing and the floor below them), not the whole scene: scaling a full-screen
+    // layer up cost a fifth of a 4K frame (from the game, 2026-11-23).
     let lightsBuf = null;
+    function lightsBox(geom, haze) {
+        const sc = geom.drawW / 1200;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        const add = (ax, ay, bx, by) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
+        for (const L of ZAGREB_LIGHTS) {
+            if (L.t === 'flood') {
+                // The wash fills its ellipse; its reflection is the same ellipse mirrored in the floor
+                const fx = geom.drawX + L.x * geom.drawW, fy = geom.drawY + L.y * geom.drawH;
+                const rx = Math.max(2, L.w * sc / 2), ry = Math.max(2, L.h * sc / 2);
+                const my = 2 * (geom.drawY + MIRROR_FAR * geom.drawH) - fy;
+                add(fx - rx, Math.min(fy, my) - ry, fx + rx, Math.max(fy, my) + ry);
+                continue;
+            }
+            const x = geom.drawX + L.x * geom.drawW, y = geom.drawY + L.y * geom.drawH;
+            const rw = Math.max(1.2, L.w * sc), rh = Math.max(1.2, L.h * sc);
+            const reach = Math.max(rw, rh) * 3.2 * haze + rw * 5 * haze; // bloom and lamp pool
+            const ry = geom.drawY + (2 * (L.t === 'lamp' ? MIRROR_NEAR : MIRROR_FAR) - L.y) * geom.drawH;
+            const refl = Math.max(rh, rw) * 3.4 + 2 * sc; // the reflection's smear and shimmer
+            add(x - reach, y - reach, x + reach, Math.max(y + reach, ry + refl));
+        }
+        // The Advent garland runs along the whole railing
+        if (adventNow()) {
+            const glow = Math.max(0.8, 1.15 * sc) * 4.6;
+            for (const b of GARLAND) {
+                const x = geom.drawX + b.x * geom.drawW, y = geom.drawY + b.y * geom.drawH;
+                const ry = geom.drawY + (2 * MIRROR_NEAR - b.y) * geom.drawH;
+                add(x - glow, y - glow, x + glow, ry + glow);
+            }
+        }
+        // ...within the scene rectangle (world coordinates)
+        x0 = Math.max(geom.ox, Math.floor(x0 - 4)); y0 = Math.max(geom.oy, Math.floor(y0 - 4));
+        x1 = Math.min(geom.ox + geom.W, Math.ceil(x1 + 4)); y1 = Math.min(geom.oy + geom.H, Math.ceil(y1 + 4));
+        return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+    }
     function drawLightsSoft(f, geom, k) {
         if (k <= 0.01) return;
+        const box = lightsBox(geom, 1 + f.wx.fog * 1.2);
+        if (!box) return;
         const q = 0.5 / S.scale;
-        const w = Math.max(1, Math.ceil(geom.W * q)), h = Math.max(1, Math.ceil(geom.H * q));
+        const w = Math.max(1, Math.ceil(box.w * q)), h = Math.max(1, Math.ceil(box.h * q));
         const c = lightsBuf || (lightsBuf = document.createElement('canvas'));
         if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
         const g = c.getContext('2d');
         g.clearRect(0, 0, w, h);
         const low = {
             ox: 0, oy: 0, W: w, H: h,
-            drawX: (geom.drawX - geom.ox) * q, drawY: (geom.drawY - geom.oy) * q, drawW: geom.drawW * q, drawH: geom.drawH * q
+            drawX: (geom.drawX - box.x) * q, drawY: (geom.drawY - box.y) * q, drawW: geom.drawW * q, drawH: geom.drawH * q
         };
         drawLights({ ...f, ctx: g, W: w, H: h }, low, k, ZAGREB_LIGHTS, 'all');
         // The layer is soft already, so the cheapest smoothing scales it up with no visible
         // difference; 'high' cost about 140 ms per redraw on a 4K display at night (2026-11-17)
         const prevQ = f.ctx.imageSmoothingQuality;
         f.ctx.imageSmoothingQuality = 'low';
-        f.ctx.drawImage(c, geom.ox, geom.oy, geom.W, geom.H);
+        f.ctx.drawImage(c, 0, 0, w, h, box.x, box.y, w / q, h / q);
         f.ctx.imageSmoothingQuality = prevQ;
     }
 
