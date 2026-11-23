@@ -7,6 +7,48 @@ It reuses the game's Zagreb Cathedral terrace background, physical day/night sun
 
 ---
 
+## Try it in your browser
+
+Nothing to install. Both pages show the same Zagreb terrace scene, and you can choose the weather, time and effects yourself.
+
+### The wallpaper: [damirlukina88.github.io/live-zagreb-wallpaper](https://damirlukina88.github.io/live-zagreb-wallpaper/)
+
+This is the page your desktop runs. By default it shows the real weather and time for Zagreb. To choose settings and effects, add them to the address after `#` and join them with `&`. Press Enter, then reload the page.
+
+| Try | Link |
+|---|---|
+| English, a different city | [`#lang=en&city=Split`](https://damirlukina88.github.io/live-zagreb-wallpaper/#lang=en&city=Split) |
+| Rain at dusk | [`#wx=63&clock=2026-11-13T16:40:00%2B01:00`](https://damirlukina88.github.io/live-zagreb-wallpaper/#wx=63&clock=2026-11-13T16:40:00%2B01:00) |
+| Thunderstorm with heavy hail at night | [`#wx=99&clock=2026-07-10T23:00:00%2B02:00`](https://damirlukina88.github.io/live-zagreb-wallpaper/#wx=99&clock=2026-07-10T23:00:00%2B02:00) |
+| Heavy snow with 20 cm lying, Advent lights | [`#wx=75&snow=20&advent=1&clock=2026-12-12T18:00:00%2B01:00`](https://damirlukina88.github.io/live-zagreb-wallpaper/#wx=75&snow=20&advent=1&clock=2026-12-12T18:00:00%2B01:00) |
+| Full moon on a clear night | [`#wx=0&clock=2026-11-24T22:00:00%2B01:00`](https://damirlukina88.github.io/live-zagreb-wallpaper/#wx=0&clock=2026-11-24T22:00:00%2B01:00) |
+| Fog in autumn, card bottom left | [`#wx=45&season=autumn&card=bl`](https://damirlukina88.github.io/live-zagreb-wallpaper/#wx=45&season=autumn&card=bl) |
+| Clear summer noon, no weather card | [`#wx=0&season=summer&clock=2026-07-10T12:00:00%2B02:00&showcard=0`](https://damirlukina88.github.io/live-zagreb-wallpaper/#wx=0&season=summer&clock=2026-07-10T12:00:00%2B02:00&showcard=0) |
+
+What you can set:
+
+- **Settings**: `city=<name>`, `lang=hr|en`, `quality=auto|low`, `fps=5-30` (frame rate in rain and snow), `card=tr|tl|br|bl` (corner of the weather card), `showcard=0|1`.
+- **Weather**: `wx=<WMO code>`. `0` clear, `1`–`3` mainly clear to overcast, `45`/`48` fog, `51`–`57` drizzle, `61`–`67` rain, `71`–`77` snow, `80`–`82` showers, `85`/`86` snow showers, `95` thunderstorm, `96`/`99` thunderstorm with hail.
+- **Sky and season**: `clock=<ISO time>` (moves the sun, moon and night lights; write `+` as `%2B`), `season=spring|summer|autumn|winter`, `seasonmix=autumn,winter,0.5` (halfway between two seasons), `cloud=<0-100>` (cloud cover in %), `winddir=<degrees the wind comes from>`.
+- **Effects**: `snow=<cm lying>`, `dry=<0-1>` (how dry the terrace is), `advent=1|0` (string lights on the railing), `soontest=rain:40` (the card's "rain in 40 min" line; also `rain-until:30`, `snow:20`).
+
+Your browser remembers your city, language, quality, frame rate and card choices until you change them the same way. The weather, time and effects are not remembered: open the page without them to see the real weather again. The full list, including the multi-display options, is under [Testing](#testing).
+
+### The game's test server: [tegoba-vjestine.pages.dev](https://tegoba-vjestine.pages.dev/)
+
+This is the test version of the game ([tegobavjestine.com](https://tegobavjestine.com/) is the live one). It uses the same background, and new changes appear here first. Click **🧪 TEST** in the bottom-left corner to open the test panel, where you can pick:
+
+- **Weather**: any weather code from clear sky to a thunderstorm with heavy hail, by day or night, with wind from 0 to 50 km/h. *Real weather* switches back.
+- **Sky time and season**: drag the sky through the day, and choose the season or let the date decide.
+- **Look (holidays and events)**: Christmas, New Year's Eve, New Year's Day, Halloween, Valentine's, Carnival, Easter or Dan škole.
+- **Music**: any track from the playlist.
+- **Date and time**: set any date, or jump to the last 10 seconds of 31 December.
+- **Easter eggs**: play the easter eggs of the current look, or the Hard-tier Matrix reveal.
+
+The panel is only on the test server, and it is hidden while you play. You can also add `?lang=en` (or `?lang=hr`) to the address to change the language, and `?holiday=<look>` to open with a look already chosen, for example [`?holiday=christmas`](https://tegoba-vjestine.pages.dev/?holiday=christmas).
+
+---
+
 ## Features
 
 - **Self-contained, and the source of the background**: the background modules (`zagreb-bg.js`, `sun.js`, `moon.js`, `zagreb-lights.js`, `weather-bg.js`, `i18n.js`) live in [`src/game/`](src/game/) and the artwork in [`web/bg/`](web/bg/). The wallpaper is their source of truth: scene changes are made here first and sent to the game (Tegoba vještine) with `npm run push-game`. `zagreb-bg.js` also carries what only the wallpaper needs (still picture and adaptive quality, span, pause, glass side displays); the game keeps its own adaptations (no span, cloud shapes built in idle time for phones, its own minute timer).
