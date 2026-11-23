@@ -201,7 +201,12 @@ function isDayAt(date, lat, lon) {
     return h >= 6 && h < 20;
 }
 
-function apply(w) {
+// provisional: the stand-in weather used while the first forecast is on its way. It sets up the
+// scene but shows nothing, so the picture fades in once, with the real clouds already in it,
+// instead of a clear made-up sky that clouds pop into a second later (the desktop keeps no
+// saved weather between restarts, so this is how every desktop start begins)
+let revealed = false;
+function apply(w, provisional = false) {
     if (!w) return;
     weather = w;
     const now = settings.clock || new Date();
@@ -215,6 +220,8 @@ function apply(w) {
         advent: settings.advent
     });
     bg.setWeather(code, day, w.windspeed);
+    if (provisional) return;
+    revealed = true;
     canvas.classList.add('wx-ready');
     overlay.classList.add('wx-ready');
     bg.show();
@@ -251,7 +258,7 @@ function renderCard(w, code, day, now) {
     for (const id of ['wp-wind', 'wp-soon', 'wp-sun-row']) if ($(id)) $(id).hidden = true;
 }
 function rerender() {
-    if (!weather) return;
+    if (!weather || !revealed) return;
     const now = settings.clock || new Date();
     const code = settings.wx !== null ? settings.wx : weather.weathercode;
     renderCard(weather, code, isDayAt(now, weather.latitude, weather.longitude), now);
@@ -265,7 +272,8 @@ function panelData(w, code, day, now) {
     };
 }
 
-apply(cachedWeather(settings.city) || {
+const saved = cachedWeather(settings.city);
+apply(saved || {
     city: settings.city,
     country: 'HR',
     latitude: 45.815,
@@ -276,7 +284,12 @@ apply(cachedWeather(settings.city) || {
     is_day: 1,
     utc_offset_seconds: 3600,
     daily: { time: [], weathercode: [], temperature_2m_max: [], temperature_2m_min: [], sunrise: [], sunset: [] }
-});
+}, !saved && settings.wx === null); // pinned test weather needs no forecast
+// No forecast within a few seconds (no network yet at boot, a slow answer): show the stand-in
+// rather than nothing; the real weather then cross-fades in when it comes
+const REVEAL_WAIT_MS = 5000;
+const revealAnyway = () => { if (!revealed) apply(weather); };
+if (!revealed) setTimeout(revealAnyway, REVEAL_WAIT_MS);
 
 // Fast retry after boot (the network is often not up yet when the desktop starts)
 const RETRY_MS = [60 * 1000, 120 * 1000, 300 * 1000];
@@ -302,6 +315,7 @@ async function refresh() {
         console.warn('Weather fetch error:', err);
         if (err && err.message === 'City not found') {
             cityMissing = true;
+            revealAnyway();
             rerender();
             return;
         }
@@ -319,7 +333,7 @@ function tick() {
         const code = settings.wx !== null ? settings.wx : weather.weathercode;
         const day = isDayAt(now, weather.latitude, weather.longitude);
         bg.setWeather(code, day, weather.windspeed);
-        renderCard(weather, code, day, now); // "rain in 40 min" counts down
+        if (revealed) renderCard(weather, code, day, now); // "rain in 40 min" counts down
     }
     if (Date.now() - lastFetch >= REFETCH_MS) refresh();
 }

@@ -46,7 +46,7 @@ html, body {
     pointer-events: none;
     display: block;
     opacity: 0;
-    transition: opacity 0.8s ease;
+    transition: opacity 1.6s ease; /* the first picture fades in gently */
     z-index: 1;
 }
 
